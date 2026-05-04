@@ -243,3 +243,7 @@ volumes:
     driver: local
   ntfy_etc:
     driver: local
+networks:
+  coolify:
+    external: true
+    name: coolify
