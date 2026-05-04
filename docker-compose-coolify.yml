@@ -195,10 +195,11 @@ services:
       - plunk_data:/app/data
       # Optional: Mount certificates for SMTP TLS
       # For Traefik acme.json:
-      - /data/coolify/proxy/acme.json:/certs/acme.json:ro
+      #- /data/coolify/proxy/acme.json:/certs/acme.json:ro
       # For PEM files:
       # - /path/to/privkey.pem:/certs/privkey.pem:ro
       # - /path/to/fullchain.pem:/certs/fullchain.pem:ro
+      - /data/coolify/plunk-certs:/certs:ro
 
     ports:
       # SMTP ports (for email relay)
