@@ -172,7 +172,7 @@ Required for builds and deployment (see turbo.json and .env.example):
   allows the same Docker image to be used across different environments by simply changing environment variables at
   runtime
 - **Frontend Variables**: Next.js apps use `NEXT_PUBLIC_*` prefixed variables that are embedded at build time for
-  client-side access
+  client-side access.
 
 ## Plugins
 
