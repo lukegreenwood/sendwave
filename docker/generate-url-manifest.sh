@@ -21,6 +21,7 @@ PLACEHOLDER_API="https://next-api.useplunk.com"
 PLACEHOLDER_DASHBOARD="https://next-app.useplunk.com"
 PLACEHOLDER_LANDING="https://www.useplunk.com"
 PLACEHOLDER_WIKI="https://docs.useplunk.com"
+PLACEHOLDER_APP_NAME="Plunk"
 
 # Output manifest file
 MANIFEST_FILE="$APP_DIR/.next/url-manifest.txt"
@@ -39,16 +40,16 @@ MANIFEST_FILE="$APP_DIR/.next/url-manifest.txt"
 if [ -d "$APP_DIR/.next/static" ]; then
   echo "   Scanning .next/static directory..."
   find "$APP_DIR/.next/static" -type f \( -name "*.js" -o -name "*.json" -o -name "*.html" \) \
-    -exec grep -l -E "$PLACEHOLDER_API|$PLACEHOLDER_DASHBOARD|$PLACEHOLDER_LANDING|$PLACEHOLDER_WIKI" {} \; \
+    -exec grep -l -E "$PLACEHOLDER_API|$PLACEHOLDER_DASHBOARD|$PLACEHOLDER_LANDING|$PLACEHOLDER_WIKI|$PLACEHOLDER_APP_NAME" {} \; \
     2>/dev/null | sed "s|$APP_DIR/||g" >> "$MANIFEST_FILE" || true
 fi
 
-# 2. Scan standalone server files  
+# 2. Scan standalone server files
 STANDALONE_DIR="$APP_DIR/.next/standalone/apps/$APP_NAME"
 if [ -d "$STANDALONE_DIR/.next" ]; then
   echo "   Scanning standalone directory..."
   find "$STANDALONE_DIR/.next" -type f \( -name "*.js" -o -name "*.json" -o -name "*.html" -o -name "*.rsc" \) \
-    -exec grep -l -E "$PLACEHOLDER_API|$PLACEHOLDER_DASHBOARD|$PLACEHOLDER_LANDING|$PLACEHOLDER_WIKI" {} \; \
+    -exec grep -l -E "$PLACEHOLDER_API|$PLACEHOLDER_DASHBOARD|$PLACEHOLDER_LANDING|$PLACEHOLDER_WIKI|$PLACEHOLDER_APP_NAME" {} \; \
     2>/dev/null | sed "s|$STANDALONE_DIR/||g" >> "$MANIFEST_FILE" || true
 fi
 

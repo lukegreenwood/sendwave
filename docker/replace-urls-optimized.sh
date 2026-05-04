@@ -15,6 +15,8 @@ replace_urls_in_app() {
   local PLACEHOLDER_DASHBOARD="https://next-app.useplunk.com"
   local PLACEHOLDER_LANDING="https://www.useplunk.com"
   local PLACEHOLDER_WIKI="https://docs.useplunk.com"
+  local PLACEHOLDER_APP_NAME="Plunk"
+  local RUNTIME_APP_NAME="${APP_NAME:-Plunk}"
 
   # Use pre-generated manifest instead of scanning all files
   local manifest_file="$app_dir/.next/url-manifest.txt"
@@ -50,6 +52,7 @@ replace_urls_in_app() {
             -e "s|$PLACEHOLDER_DASHBOARD|$DASHBOARD_URI|g" \
             -e "s|$PLACEHOLDER_LANDING|$LANDING_URI|g" \
             -e "s|$PLACEHOLDER_WIKI|$WIKI_URI|g" \
+            -e "s|$PLACEHOLDER_APP_NAME|$RUNTIME_APP_NAME|g" \
             "$runtime_path" > "${runtime_path}.tmp" && mv "${runtime_path}.tmp" "$runtime_path"
       fi
     done
@@ -73,6 +76,7 @@ replace_urls_in_app() {
             -e "s|$PLACEHOLDER_DASHBOARD|$DASHBOARD_URI|g" \
             -e "s|$PLACEHOLDER_LANDING|$LANDING_URI|g" \
             -e "s|$PLACEHOLDER_WIKI|$WIKI_URI|g" \
+            -e "s|$PLACEHOLDER_APP_NAME|$RUNTIME_APP_NAME|g" \
             "$runtime_sitemap_path" > "${runtime_sitemap_path}.tmp" && mv "${runtime_sitemap_path}.tmp" "$runtime_sitemap_path"
       fi
     done < "$sitemap_manifest"
@@ -84,6 +88,7 @@ replace_urls_in_app() {
             -e "s|$PLACEHOLDER_DASHBOARD|$DASHBOARD_URI|g" \
             -e "s|$PLACEHOLDER_LANDING|$LANDING_URI|g" \
             -e "s|$PLACEHOLDER_WIKI|$WIKI_URI|g" \
+            -e "s|$PLACEHOLDER_APP_NAME|$RUNTIME_APP_NAME|g" \
             "$sitemap_file" > "${sitemap_file}.tmp" && mv "${sitemap_file}.tmp" "$sitemap_file"
       fi
     done
@@ -98,6 +103,7 @@ replace_urls_in_app() {
           -e "s|$PLACEHOLDER_DASHBOARD|$DASHBOARD_URI|g" \
           -e "s|$PLACEHOLDER_LANDING|$LANDING_URI|g" \
           -e "s|$PLACEHOLDER_WIKI|$WIKI_URI|g" \
+          -e "s|$PLACEHOLDER_APP_NAME|$RUNTIME_APP_NAME|g" \
           "$openapi_file" > "${openapi_file}.tmp" && mv "${openapi_file}.tmp" "$openapi_file"
       echo "   ✅ Updated OpenAPI spec with runtime URLs"
     fi

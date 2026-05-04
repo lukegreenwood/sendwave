@@ -44,6 +44,7 @@ export API_URI="${API_URI:-${PROTOCOL}://${API_DOMAIN}}"
 export DASHBOARD_URI="${DASHBOARD_URI:-${PROTOCOL}://${DASHBOARD_DOMAIN}}"
 export LANDING_URI="${LANDING_URI:-${PROTOCOL}://${LANDING_DOMAIN}}"
 export WIKI_URI="${WIKI_URI:-${PROTOCOL}://${WIKI_DOMAIN}}"
+export APP_NAME="${APP_NAME:-Plunk}"
 
 # Generate nginx configuration from template
 echo "📝 Generating nginx configuration..."
