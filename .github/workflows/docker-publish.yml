@@ -70,9 +70,10 @@ jobs:
             TAGS="${VERSION},${MAJOR}.${MINOR},${MAJOR},latest"
             echo "Building RELEASE with tags: $TAGS"
           else
-            # Regular commit: use SHA tags only (no latest)
+            # Regular commit: tag with branch name + SHA
             SHORT_SHA="${GITHUB_SHA:0:7}"
-            TAGS="sha-${SHORT_SHA}"
+            BRANCH="${GITHUB_REF_NAME//\//-}"
+            TAGS="${BRANCH},sha-${SHORT_SHA}"
             echo "Building COMMIT with tags: $TAGS"
           fi
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
