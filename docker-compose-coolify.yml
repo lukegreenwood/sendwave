@@ -109,7 +109,9 @@ services:
   # ============================================
 
   plunk:
-    image: ghcr.io/useplunk/plunk:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: plunk
     restart: unless-stopped
     environment:
