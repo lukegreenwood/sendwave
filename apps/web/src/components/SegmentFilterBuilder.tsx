@@ -8,6 +8,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectItemWithDescription,
   SelectTrigger,
   SelectValue,
 } from '@plunk/ui';
@@ -16,26 +17,32 @@ import {Check, ChevronsUpDown, GripVertical, Plus, Search, Trash2} from 'lucide-
 import {memo, useCallback, useEffect, useMemo, useState} from 'react';
 import {network} from '../lib/network';
 
-const STANDARD_OPERATORS: {value: SegmentFilterOperator; label: string}[] = [
-  {value: 'equals', label: 'Equals'},
-  {value: 'notEquals', label: 'Not equals'},
-  {value: 'contains', label: 'Contains'},
-  {value: 'notContains', label: 'Does not contain'},
-  {value: 'greaterThan', label: 'Greater than'},
-  {value: 'lessThan', label: 'Less than'},
-  {value: 'greaterThanOrEqual', label: 'Greater than or equal to'},
-  {value: 'lessThanOrEqual', label: 'Less than or equal to'},
-  {value: 'exists', label: 'Exists'},
-  {value: 'notExists', label: 'Does not exist'},
-  {value: 'within', label: 'Younger than (time)'},
-  {value: 'olderThan', label: 'Older than (time)'},
+const STANDARD_OPERATORS: {value: SegmentFilterOperator; label: string; description: string}[] = [
+  {value: 'equals', label: 'Equals', description: 'Exact match'},
+  {value: 'notEquals', label: 'Not equals', description: 'Anything other than this value'},
+  {value: 'contains', label: 'Contains', description: 'Value includes this text'},
+  {value: 'notContains', label: 'Does not contain', description: 'Value does not include this text'},
+  {value: 'greaterThan', label: 'Greater than', description: 'Value is higher than'},
+  {value: 'lessThan', label: 'Less than', description: 'Value is lower than'},
+  {value: 'greaterThanOrEqual', label: 'Greater than or equal', description: 'Value is at least'},
+  {value: 'lessThanOrEqual', label: 'Less than or equal', description: 'Value is at most'},
+  {value: 'exists', label: 'Has a value', description: 'Field is set to anything'},
+  {value: 'notExists', label: 'Has no value', description: 'Field is empty or unset'},
+  {value: 'within', label: 'Less than X ago', description: 'Date is within the last X days/hours'},
+  {value: 'olderThan', label: 'More than X ago', description: 'Date is older than X days/hours'},
 ];
 
-const EVENT_OPERATORS: {value: SegmentFilterOperator; label: string}[] = [
-  {value: 'triggered', label: 'Ever occurred'},
-  {value: 'triggeredWithin', label: 'Occurred within'},
-  {value: 'triggeredOlderThan', label: 'Occurred over (time) ago'},
-  {value: 'notTriggered', label: 'Never occurred'},
+const EVENT_OPERATORS: {value: SegmentFilterOperator; label: string; description: string}[] = [
+  {value: 'triggered', label: 'Ever occurred', description: 'This event has happened at least once'},
+  {value: 'triggeredWithin', label: 'Occurred within', description: 'Happened at least once in the last X days/hours'},
+  {value: 'triggeredOlderThan', label: 'Occurred, but not recently', description: 'Has happened before, but not in the last X days/hours'},
+  {value: 'notTriggered', label: 'Never occurred', description: 'This event has never happened'},
+  {value: 'notTriggeredWithin', label: 'Not occurred within', description: 'Has not happened in the last X days/hours — includes contacts who never triggered this'},
+];
+
+const SEGMENT_OPERATORS: {value: SegmentFilterOperator; label: string; description: string}[] = [
+  {value: 'memberOfSegment', label: 'Is member of', description: 'Contact is currently in this segment'},
+  {value: 'notMemberOfSegment', label: 'Is not member of', description: 'Contact is not in this segment'},
 ];
 
 const TIME_UNITS = [
@@ -55,25 +62,27 @@ const STANDARD_FIELDS = [
 interface FieldOption {
   value: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'date' | 'event' | 'email';
-  category: 'Contact Fields' | 'Custom Data' | 'Events' | 'Email Activity';
+  description?: string;
+  type: 'string' | 'number' | 'boolean' | 'date' | 'event' | 'email' | 'segment';
+  category: 'Contact Fields' | 'Custom Data' | 'Events' | 'Email Activity' | 'Segments';
 }
 
-// Hook to fetch available fields and events
-function useAvailableOptions() {
+// Hook to fetch available fields, events, and segments
+function useAvailableOptions(currentSegmentId?: string) {
   const [fields, setFields] = useState<FieldOption[]>([...STANDARD_FIELDS]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchOptions = async () => {
       try {
-        // Fetch contact fields with types
-        const fieldsData = await network.fetch<{
-          fields: Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date'}>;
-        }>('GET', '/contacts/fields');
-
-        // Fetch event names
-        const eventsData = await network.fetch<{eventNames: string[]}>('GET', '/events/names');
+        // Fetch contact fields with types, event names, and segments in parallel
+        const [fieldsData, eventsData, segmentsData] = await Promise.all([
+          network.fetch<{
+            fields: Array<{field: string; type: 'string' | 'number' | 'boolean' | 'date'}>;
+          }>('GET', '/contacts/fields'),
+          network.fetch<{eventNames: string[]}>('GET', '/events/names'),
+          network.fetch<Array<{id: string; name: string; memberCount: number}>>('GET', '/segments'),
+        ]);
 
         // Build field options from typed fields
         const typedFields: FieldOption[] = (fieldsData.fields || []).map(f => {
@@ -113,7 +122,18 @@ function useAvailableOptions() {
           }
         });
 
-        setFields([...typedFields, ...eventOptions, ...emailOptions]);
+        // Build segment options, excluding the current segment to prevent self-reference
+        const segmentOptions: FieldOption[] = (segmentsData || [])
+          .filter((s: {id: string; name: string; memberCount: number}) => s.id !== currentSegmentId)
+          .map((s: {id: string; name: string; memberCount: number}) => ({
+            value: `segment.${s.id}`,
+            label: s.name,
+            description: `${s.memberCount.toLocaleString()} ${s.memberCount === 1 ? 'person' : 'people'}`,
+            type: 'segment' as const,
+            category: 'Segments' as const,
+          }));
+
+        setFields([...typedFields, ...eventOptions, ...emailOptions, ...segmentOptions]);
       } catch (error) {
         console.error('Failed to fetch available fields and events:', error);
       } finally {
@@ -122,7 +142,7 @@ function useAvailableOptions() {
     };
 
     fetchOptions();
-  }, []);
+  }, [currentSegmentId]);
 
   return {fields, loading};
 }
@@ -154,6 +174,10 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
 
   // Helper to get valid operators for a field type
   const getOperatorsForType = useCallback((type: string, isEvent: boolean) => {
+    if (type === 'segment') {
+      return SEGMENT_OPERATORS;
+    }
+
     if (isEvent) {
       return EVENT_OPERATORS;
     }
@@ -185,8 +209,8 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
     );
   }, []);
 
-  const needsValue = !['exists', 'notExists', 'triggered', 'notTriggered'].includes(filter.operator);
-  const needsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan'].includes(filter.operator);
+  const needsValue = !['exists', 'notExists', 'triggered', 'notTriggered', 'memberOfSegment', 'notMemberOfSegment'].includes(filter.operator);
+  const needsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan', 'notTriggeredWithin'].includes(filter.operator);
 
   // Get field type from available fields
   const fieldOption = useMemo(
@@ -196,9 +220,14 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
   const fieldType = fieldOption?.type || 'string';
 
   const isEventOrEmailActivity = fieldType === 'event' || fieldType === 'email';
+  const isSegment = fieldType === 'segment';
 
   // Get operators based on field type (memoized)
   const operators = useMemo(() => {
+    if (isSegment) {
+      return SEGMENT_OPERATORS;
+    }
+
     if (isEventOrEmailActivity) {
       return EVENT_OPERATORS;
     }
@@ -229,23 +258,35 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
     return STANDARD_OPERATORS.filter(op =>
       ['equals', 'notEquals', 'contains', 'notContains', 'exists', 'notExists'].includes(op.value),
     );
-  }, [fieldType, isEventOrEmailActivity]);
+  }, [fieldType, isEventOrEmailActivity, isSegment]);
 
   const handleFieldChange = useCallback(
     (value: string) => {
       const selectedField = availableFields.find(f => f.value === value);
       const newFieldType = selectedField?.type || 'string';
       const isEvent = newFieldType === 'event' || newFieldType === 'email';
-      const currentOperatorIsEvent = ['triggered', 'triggeredWithin', 'triggeredOlderThan', 'notTriggered'].includes(
+      const isNewSegment = newFieldType === 'segment';
+      const currentOperatorIsEvent = ['triggered', 'triggeredWithin', 'triggeredOlderThan', 'notTriggered', 'notTriggeredWithin'].includes(
         filter.operator,
       );
+      const currentOperatorIsSegment = ['memberOfSegment', 'notMemberOfSegment'].includes(filter.operator);
 
       // Determine default operator and value based on new field type
       let newOperator = filter.operator;
-      let newValue: string | number | boolean | undefined = undefined;
-      let newUnit: 'days' | 'hours' | 'minutes' | undefined = undefined;
+      let newValue: string | number | boolean | undefined = filter.value;
+      let newUnit: 'days' | 'hours' | 'minutes' | undefined = filter.unit;
 
-      if (isEvent && !currentOperatorIsEvent) {
+      if (isNewSegment && !currentOperatorIsSegment) {
+        // Switching to segment field
+        newOperator = 'memberOfSegment';
+        newValue = undefined;
+        newUnit = undefined;
+      } else if (!isNewSegment && currentOperatorIsSegment) {
+        // Switching from segment to non-segment field
+        newOperator = isEvent ? 'triggered' : 'equals';
+        newValue = isEvent ? undefined : getDefaultValueForType(newFieldType);
+        newUnit = undefined;
+      } else if (isEvent && !currentOperatorIsEvent) {
         // Switching to event field
         newOperator = 'triggered';
         newValue = undefined;
@@ -273,7 +314,7 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
         newUnit = undefined;
 
         // If the new operator doesn't support units but we had them, ensure value is appropriate
-        const newOperatorNeedsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan'].includes(
+        const newOperatorNeedsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan', 'notTriggeredWithin'].includes(
           newOperator,
         );
         if (!newOperatorNeedsUnit) {
@@ -292,7 +333,7 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
       setOpen(false);
       setSearch('');
     },
-    [availableFields, filter.operator, fieldType, onChange, getDefaultValueForType, getOperatorsForType],
+    [availableFields, filter.operator, filter.value, filter.unit, fieldType, onChange, getDefaultValueForType, getOperatorsForType],
   );
 
   // Get label for selected field
@@ -381,9 +422,11 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
                                 {field.type}
                               </span>
                             </div>
-                            {field.value !== field.label && (
+                            {field.description ? (
+                              <span className="text-xs text-neutral-500">{field.description}</span>
+                            ) : field.value !== field.label ? (
                               <span className="text-xs text-neutral-500">{field.value}</span>
-                            )}
+                            ) : null}
                           </div>
                         </button>
                       ))}
@@ -405,12 +448,13 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
               const oldOperator = filter.operator;
 
               // Check if we're switching between operators that need different value types
-              const oldNeedsValue = !['exists', 'notExists', 'triggered', 'notTriggered'].includes(oldOperator);
-              const newNeedsValue = !['exists', 'notExists', 'triggered', 'notTriggered'].includes(newOperator);
-              const oldNeedsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan'].includes(
+              const noValueOperators = ['exists', 'notExists', 'triggered', 'notTriggered', 'memberOfSegment', 'notMemberOfSegment'];
+              const oldNeedsValue = !noValueOperators.includes(oldOperator);
+              const newNeedsValue = !noValueOperators.includes(newOperator);
+              const oldNeedsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan', 'notTriggeredWithin'].includes(
                 oldOperator,
               );
-              const newNeedsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan'].includes(
+              const newNeedsUnit = ['within', 'triggeredWithin', 'olderThan', 'triggeredOlderThan', 'notTriggeredWithin'].includes(
                 newOperator,
               );
 
@@ -426,28 +470,29 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
                 updatedFilter.unit = undefined;
               } else if (newNeedsUnit && !oldNeedsUnit) {
                 updatedFilter.unit = 'days';
-                // Set default numeric value if needed
-                if (typeof updatedFilter.value !== 'number') {
-                  updatedFilter.value = 7;
-                }
+                updatedFilter.value = typeof updatedFilter.value === 'number' && updatedFilter.value > 0 ? updatedFilter.value : 7;
               }
 
               // If switching to an operator that needs a value but we don't have one, set default
-              if (newNeedsValue && !oldNeedsValue) {
+              // Skip when entering a unit-based operator — it already set the value above
+              if (newNeedsValue && !oldNeedsValue && !newNeedsUnit) {
                 updatedFilter.value = getDefaultValueForType(fieldType);
               }
 
               onChange(updatedFilter);
             }}
           >
-            <SelectTrigger className="text-sm">
+            <SelectTrigger className="text-sm h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {operators.map(op => (
-                <SelectItem key={op.value} value={op.value}>
-                  {op.label}
-                </SelectItem>
+                <SelectItemWithDescription
+                  key={op.value}
+                  value={op.value}
+                  title={op.label}
+                  description={op.description}
+                />
               ))}
             </SelectContent>
           </Select>
@@ -466,14 +511,14 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
                 type="number"
                 value={filter.value as number}
                 onChange={e => onChange({...filter, value: parseInt(e.target.value) || 0})}
-                className="text-sm flex-1"
+                className="text-sm flex-1 bg-white"
                 min="1"
               />
               <Select
                 value={filter.unit || 'days'}
                 onValueChange={(v: 'days' | 'hours' | 'minutes') => onChange({...filter, unit: v})}
               >
-                <SelectTrigger className="text-sm w-[110px]">
+                <SelectTrigger className="text-sm h-9 w-[110px] bg-white">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -490,7 +535,7 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
               value={String(filter.value ?? 'true')}
               onValueChange={v => onChange({...filter, value: v === 'true'})}
             >
-              <SelectTrigger className="text-sm">
+              <SelectTrigger className="text-sm h-9 bg-white">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -506,7 +551,7 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
                 const val = e.target.value;
                 onChange({...filter, value: val === '' ? 0 : parseFloat(val) || 0});
               }}
-              className="text-sm"
+              className="text-sm bg-white"
               placeholder="Enter number"
             />
           ) : fieldType === 'date' ? (
@@ -514,14 +559,14 @@ const FilterRow = memo(function FilterRow({filter, onChange, onRemove, available
               type="date"
               value={filter.value ? String(filter.value).split('T')[0] : ''}
               onChange={e => onChange({...filter, value: e.target.value})}
-              className="text-sm"
+              className="text-sm bg-white"
             />
           ) : (
             <Input
               type="text"
               value={String(filter.value ?? '')}
               onChange={e => onChange({...filter, value: e.target.value})}
-              className="text-sm"
+              className="text-sm bg-white"
               placeholder="Enter value"
             />
           )}
@@ -758,10 +803,11 @@ function FilterConditionComponent({condition, onChange, depth = 0, availableFiel
 interface SegmentFilterBuilderProps {
   condition: FilterCondition;
   onChange: (condition: FilterCondition) => void;
+  currentSegmentId?: string;
 }
 
-export function SegmentFilterBuilder({condition, onChange}: SegmentFilterBuilderProps) {
-  const {fields, loading} = useAvailableOptions();
+export function SegmentFilterBuilder({condition, onChange, currentSegmentId}: SegmentFilterBuilderProps) {
+  const {fields, loading} = useAvailableOptions(currentSegmentId);
 
   if (loading) {
     return <div className="text-sm text-neutral-500 py-4">Loading available fields and events...</div>;

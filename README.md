@@ -1,4 +1,4 @@
-![card.png](/assets/card.png)
+![card.png](https://www.useplunk.com/api/og?title=Open-Source%0AEmail%20Platform&description=%240.001+per+email.+No+contact+limits.+Free+to+self-host.)
 
 <h1 align="center">Plunk</h1>
 
@@ -15,23 +15,27 @@
     <a href="https://github.com/useplunk/plunk/network/members"><img src="https://img.shields.io/github/forks/useplunk/plunk" alt="Forks"/></a>
     <a href="https://github.com/useplunk/plunk/pkgs/container/plunk"><img src="https://img.shields.io/badge/docker-available-blue?logo=docker" alt="Docker"/></a>
     <a href="https://github.com/sponsors/driaug"><img src="https://img.shields.io/badge/sponsor-❤-ff69b4" alt="Sponsor"/></a>
+    <a href="https://docs.useplunk.com"><img src="https://img.shields.io/badge/docs-docs.useplunk.com-black" alt="Documentation"/></a>
+    <a href="https://useplunk.com/discord"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"/></a>
 </p>
 
 ## Introduction
 
-Plunk is an open-source email platform built on top of AWS SES. It allows you to easily send emails from your
-applications.
-It can be considered as a self-hosted alternative to services
-like [SendGrid](https://sendgrid.com/), [Resend](https://resend.com) or [Mailgun](https://www.mailgun.com/).
+Transactional emails, marketing campaigns, and workflow automation — in one platform. Self-hostable, $0.001 per email, no contact limits.
+
+An open-source, self-hosted alternative to tools [SendGrid](https://sendgrid.com/), [Resend](https://resend.com) or [Mailgun](https://www.mailgun.com/).
 
 ## Features
 
 - **Transactional Emails**: Send emails straight from your API with template support and variable substitution
-- **Campaigns**: Send newsletters and product updates to large audiences with segmentation
+- **SMTP**: Use Plunk as an SMTP relay to send emails from any existing tool or framework
+- **Campaigns**: Send newsletters and product updates to large audiences
 - **Workflows**: Create advanced automations with triggers, delays, and conditional logic
-- **Contact Management**: Organize contacts with custom fields and dynamic segmentation
+- **Segments**: Organize contacts with dynamic filtering and target the right audience
+- **Contact Management**: Manage contacts with custom fields and full activity history
 - **Analytics**: Track opens, clicks, bounces, and engagement metrics in real-time
 - **Custom Domains**: Verify and send from your own domains with DKIM/SPF support
+- **Inbound Emails**: Receive and process incoming emails with custom routing rules
 
 ## Sponsors
 
@@ -45,6 +49,11 @@ You can pull the latest image from [Github](https://github.com/useplunk/plunk/pk
 
 A complete guide on how to deploy Plunk can be found in
 the [documentation](https://docs.useplunk.com/self-hosting/introduction).
+
+## Community
+
+- **Documentation**: [docs.useplunk.com](https://docs.useplunk.com)
+- **Discord**: [useplunk.com/discord](https://useplunk.com/discord)
 
 ## Contributing
 
