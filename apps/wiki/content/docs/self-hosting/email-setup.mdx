@@ -74,3 +74,103 @@ SES_CONFIGURATION_SET_NO_TRACKING="plunk-no-tracking"
 
 Once you have configured AWS SES with the above settings, you can add and verify your domain directly through the Plunk dashboard. Plunk will handle the domain verification and DKIM setup with AWS SES automatically and show you the right records to add to your DNS.
 
+## 6. Inbound Email (Optional)
+
+Plunk can receive emails sent to your verified domains and turn them into `email.received` events that trigger workflows. This is **optional** — only configure this if you want users to be able to receive inbound mail.
+
+<Callout title="Region availability" variant="warning">
+  AWS SES inbound (Email Receiving) is only available in a subset of SES regions — check the
+  [AWS documentation](https://docs.aws.amazon.com/ses/latest/dg/regions.html) for the current list. Your
+  `AWS_SES_REGION` must be one of the inbound-supported regions, otherwise inbound mail will not work.
+</Callout>
+
+### 6.1 Extend the IAM Policy
+
+Add the following actions to the `plunk-ses` IAM policy created in step 1 so Plunk can read inbound configuration:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "ses:DescribeActiveReceiptRuleSet",
+    "ses:DescribeReceiptRuleSet",
+    "ses:ListReceiptRuleSets"
+  ],
+  "Resource": "*"
+}
+```
+
+### 6.2 Create an Inbound SNS Topic
+
+1. Go to SNS Console → Topics → Create topic
+2. Type: **Standard**
+3. Name: `plunk-ses-inbound`
+4. Create topic
+5. Create subscription:
+   - Protocol: **HTTPS**
+   - Endpoint: `https://api.yourdomain.com/webhooks/sns`
+   - Enable **Raw message delivery**: **OFF** (the controller expects the standard SNS envelope)
+6. Plunk automatically confirms the subscription when it receives the `SubscriptionConfirmation` request.
+
+You can reuse the existing `plunk-ses-events` topic instead, but a dedicated topic makes it easier to tune retry/throughput settings for inbound traffic separately.
+
+### 6.3 Allow SES to Publish to the Topic
+
+Edit the SNS topic's **Access policy** and add a statement allowing the SES service to publish:
+
+```json
+{
+  "Effect": "Allow",
+  "Principal": {"Service": "ses.amazonaws.com"},
+  "Action": "SNS:Publish",
+  "Resource": "arn:aws:sns:<region>:<account-id>:plunk-ses-inbound",
+  "Condition": {
+    "StringEquals": {"AWS:SourceAccount": "<account-id>"}
+  }
+}
+```
+
+### 6.4 Create a Receipt Rule Set
+
+SES allows only **one active receipt rule set per region**. If you already have one, add a new rule to it instead of creating another.
+
+1. SES Console → **Email receiving** → Rule sets → Create rule set
+2. Name: `plunk-inbound`
+3. Create a new rule:
+   - Name: `plunk-deliver-inbound`
+   - **Recipient conditions**: leave empty to catch every verified domain, or add specific domains/addresses
+   - **Actions** (in order):
+     1. **Deliver to Amazon SNS topic**
+        - Topic: `plunk-ses-inbound`
+        - Encoding: **Base64** (Plunk decodes this automatically — see [Webhooks.ts:163](https://github.com/useplunk/plunk/blob/next/apps/api/src/controllers/Webhooks.ts#L163))
+   - Enable: **TLS required** is recommended
+4. Set the rule set as **Active**
+
+<Callout title="Message size limit" variant="warning">
+  The SNS action delivers the full email inline and is capped at **150 KB per message** (SNS payload limit). For larger
+  messages — including those with attachments — use an **S3 action** before the SNS action so SES stores the raw email
+  in S3 and only sends a pointer via SNS. Plunk currently consumes the inline content; full S3-backed delivery requires
+  custom processing.
+</Callout>
+
+### 6.5 Verify the Domain MX Record
+
+For each domain that should receive mail, the project owner adds an MX record pointing at the SES inbound endpoint for your region:
+
+```
+Type:  MX
+Name:  yourdomain.com
+Value: 10 inbound-smtp.<region>.amazonaws.com
+```
+
+Plunk shows this record on the **Domains** tab in project settings once a domain is verified. The hostname is built from your `AWS_SES_REGION` environment variable, so make sure that value is correct.
+
+### 6.6 Test
+
+1. Create a workflow with **Trigger event** = `email.received`
+2. Send an email from any external mailbox to `anything@yourdomain.com`
+3. Check the API logs for `[WEBHOOK] Received inbound email notification from SES`
+4. Confirm the workflow execution appears in the dashboard
+
+If the SNS subscription is stuck in "Pending confirmation", check the API logs for the `SubscribeURL` and verify your `api.yourdomain.com` endpoint is publicly reachable over HTTPS.
+
