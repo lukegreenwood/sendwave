@@ -22,9 +22,42 @@ import {
   Input,
 } from '@plunk/ui';
 import {AnimatePresence, motion} from 'framer-motion';
-import {Check, CheckCircle2, ChevronDown, Copy, Globe, RefreshCw, Trash2, XCircle} from 'lucide-react';
+import {Check, CheckCircle2, ChevronDown, Copy, Download, Globe, RefreshCw, Trash2, XCircle} from 'lucide-react';
 import {useConfig} from '../lib/hooks/useConfig';
 import {useAddDomain, useCheckDomainVerification, useDomains, useRemoveDomain} from '../lib/hooks/useDomains';
+
+function downloadZoneFile(domain: string, tokens: string[], sesRegion?: string) {
+  const lines: string[] = [
+    `; DNS records for ${domain}`,
+    `; Generated ${new Date().toISOString()}`,
+    `; Import into Cloudflare via DNS → Advanced → Import and Export DNS records`,
+    ``,
+    `$ORIGIN ${domain}.`,
+    `$TTL 3600`,
+    ``,
+    `; DKIM (required)`,
+  ];
+  for (const t of tokens) {
+    lines.push(`${t}._domainkey  IN  CNAME  ${t}.dkim.amazonses.com.`);
+  }
+  lines.push(``, `; DMARC (recommended)`);
+  lines.push(`_dmarc  IN  TXT  "v=DMARC1; p=none;"`);
+  if (sesRegion) {
+    lines.push(``, `; MAIL FROM domain (optional - improves deliverability)`);
+    lines.push(`plunk  IN  MX  10 feedback-smtp.${sesRegion}.amazonses.com.`);
+    lines.push(`plunk  IN  TXT  "v=spf1 include:amazonses.com ~all"`);
+  }
+
+  const blob = new Blob([lines.join('\n') + '\n'], {type: 'text/plain;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${domain}.zone.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 function AnimatedCopyIcon({isCopied}: {isCopied: boolean}) {
   return (
@@ -692,20 +725,33 @@ export function DomainsSettings({projectId}: DomainsSettingsProps) {
                               </div>
                             )}
 
-                            <div className="flex items-start gap-2 p-3 bg-neutral-50 rounded-lg border border-neutral-200 mt-3">
-                              <div className="text-neutral-500 mt-0.5">
-                                <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                                  <path
-                                    fillRule="evenodd"
-                                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                                    clipRule="evenodd"
-                                  />
-                                </svg>
+                            <div className="flex items-start justify-between gap-3 p-3 bg-neutral-50 rounded-lg border border-neutral-200 mt-3">
+                              <div className="flex items-start gap-2">
+                                <div className="text-neutral-500 mt-0.5">
+                                  <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                    <path
+                                      fillRule="evenodd"
+                                      d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                                      clipRule="evenodd"
+                                    />
+                                  </svg>
+                                </div>
+                                <p className="text-xs text-neutral-600">
+                                  Click the copy icon to copy record values, or export them as a zone file to import
+                                  into your DNS provider. Use the refresh button to verify.
+                                </p>
                               </div>
-                              <p className="text-xs text-neutral-600">
-                                Click the copy icon to copy record values. After adding all records to your DNS
-                                provider, use the refresh button above to verify your domain.
-                              </p>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="shrink-0 text-xs gap-1.5 text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                                onClick={() =>
+                                  downloadZoneFile(domain.domain, status.tokens as string[], config?.aws?.sesRegion)
+                                }
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Export DNS
+                              </Button>
                             </div>
                           </div>
                         )}
