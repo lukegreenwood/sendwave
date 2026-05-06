@@ -14,8 +14,21 @@
 FROM node:20-slim AS deps
 WORKDIR /app
 
-# Install curl for health checks
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install:
+#  - curl: used by health checks elsewhere
+#  - build-essential, python3, pkg-config: required if any native module
+#    (bcrypt, msgpackr-extract, etc.) has to fall back to compiling from source
+#    because the prebuilt binary download fails or is unavailable for this libc.
+#    `node:20-slim` does NOT ship these, which is the most common cause of
+#    silent yarn link-step failures.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      curl \
+      ca-certificates \
+      build-essential \
+      python3 \
+      pkg-config && \
+    rm -rf /var/lib/apt/lists/*
 
 # Enable Corepack and set Yarn version
 RUN corepack enable && corepack prepare yarn@4.9.1 --activate
@@ -58,13 +71,17 @@ COPY apps/wiki/tsconfig.json ./apps/wiki/tsconfig.json
 ENV YARN_HTTP_TIMEOUT=600000 \
     YARN_HTTP_RETRY=5 \
     YARN_NETWORK_CONCURRENCY=8 \
-    YARN_ENABLE_TELEMETRY=false
+    YARN_ENABLE_TELEMETRY=false \
+    YARN_CHILD_CONCURRENCY=2 \
+    NODE_OPTIONS=--max-old-space-size=4096
 
 # Install dependencies (native amd64, no cross-compilation)
-# Use a unique cache id to avoid contention with other stages.
+# - Unique cache ids avoid contention with other stages.
+# - --inline-builds streams build-script (postinstall) output so any failure
+#   shows its actual error instead of dying silently with exit code 1.
 RUN --mount=type=cache,id=plunk-yarn-berry,target=/root/.yarn/berry/cache,sharing=locked \
     --mount=type=cache,id=plunk-yarn-cache,target=/root/.cache/yarn,sharing=locked \
-    yarn install --immutable
+    yarn install --immutable --inline-builds
 
 # ============================================
 # Stage 1b: Production Dependencies for API/SMTP
@@ -78,7 +95,7 @@ WORKDIR /app
 # Re-run focus in production mode to drop devDependencies and unused workspaces.
 RUN --mount=type=cache,id=plunk-yarn-berry,target=/root/.yarn/berry/cache,sharing=locked \
     --mount=type=cache,id=plunk-yarn-cache,target=/root/.cache/yarn,sharing=locked \
-    yarn workspaces focus api smtp --production
+    yarn workspaces focus api smtp --production --inline-builds
 
 # ============================================
 # Stage 2: Builder
