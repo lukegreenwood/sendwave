@@ -92,9 +92,12 @@ FROM deps AS prod-deps
 WORKDIR /app
 
 # Re-run focus in production mode to drop devDependencies and unused workspaces.
+# Note: `yarn workspaces focus` does not accept `--inline-builds` - that flag
+# only exists on `yarn install`. Build script output here will be silent unless
+# something fails (in which case YN0009 errors will surface).
 RUN --mount=type=cache,id=plunk-yarn-berry,target=/root/.yarn/berry/cache,sharing=locked \
     --mount=type=cache,id=plunk-yarn-cache,target=/root/.cache/yarn,sharing=locked \
-    yarn workspaces focus api smtp --production --inline-builds
+    yarn workspaces focus api smtp --production
 
 # ============================================
 # Stage 2: Builder
