@@ -49,36 +49,35 @@ COPY apps/wiki/mdx-components.tsx ./apps/wiki/mdx-components.tsx
 COPY apps/wiki/next.config.mjs ./apps/wiki/next.config.mjs
 COPY apps/wiki/tsconfig.json ./apps/wiki/tsconfig.json
 
+# Configure Yarn for resilient network behaviour on small VPS hosts.
+# These env vars are picked up by Yarn 4 directly - no .yarnrc.yml mutation needed.
+# - YARN_HTTP_TIMEOUT: 10 min (default 60s) - tolerate slow registry responses
+# - YARN_HTTP_RETRY: 5 attempts (default 3) - more retries on transient failures
+# - YARN_NETWORK_CONCURRENCY: 8 (default unlimited) - cap parallel fetches so we
+#   don't exhaust the VPS network/file descriptors
+ENV YARN_HTTP_TIMEOUT=600000 \
+    YARN_HTTP_RETRY=5 \
+    YARN_NETWORK_CONCURRENCY=8 \
+    YARN_ENABLE_TELEMETRY=false
+
 # Install dependencies (native amd64, no cross-compilation)
-RUN --mount=type=cache,target=/root/.yarn/berry/cache,sharing=locked \
-    --mount=type=cache,target=/root/.cache/yarn,sharing=locked \
+# Use a unique cache id to avoid contention with other stages.
+RUN --mount=type=cache,id=plunk-yarn-berry,target=/root/.yarn/berry/cache,sharing=locked \
+    --mount=type=cache,id=plunk-yarn-cache,target=/root/.cache/yarn,sharing=locked \
     yarn install --immutable
 
 # ============================================
 # Stage 1b: Production Dependencies for API/SMTP
 # ============================================
-FROM node:20-slim AS prod-deps
+# Derives from `deps` so we don't run two parallel `yarn install`s on the same
+# cache mount (which was causing fetch-step failures on lower-spec VPS hosts).
+# `yarn workspaces focus --production` prunes devDependencies in place.
+FROM deps AS prod-deps
 WORKDIR /app
 
-# Enable Corepack and set Yarn version
-RUN corepack enable && corepack prepare yarn@4.9.1 --activate
-
-# Copy Yarn configuration
-COPY .yarnrc.yml ./
-COPY .yarn/releases ./.yarn/releases
-
-# Copy all package.json files (needed for workspace resolution)
-COPY package.json yarn.lock ./
-COPY apps/api/package.json ./apps/api/
-COPY apps/smtp/package.json ./apps/smtp/
-COPY packages/db/package.json ./packages/db/
-COPY packages/shared/package.json ./packages/shared/
-COPY packages/types/package.json ./packages/types/
-COPY packages/email/package.json ./packages/email/
-
-# Install ONLY production dependencies for api, smtp, and their workspace dependencies
-RUN --mount=type=cache,target=/root/.yarn/berry/cache,sharing=locked \
-    --mount=type=cache,target=/root/.cache/yarn,sharing=locked \
+# Re-run focus in production mode to drop devDependencies and unused workspaces.
+RUN --mount=type=cache,id=plunk-yarn-berry,target=/root/.yarn/berry/cache,sharing=locked \
+    --mount=type=cache,id=plunk-yarn-cache,target=/root/.cache/yarn,sharing=locked \
     yarn workspaces focus api smtp --production
 
 # ============================================
