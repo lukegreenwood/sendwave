@@ -116,13 +116,19 @@ services:
       # Coolify will build this on each deploy instead of pulling a prebuilt image.
       platforms:
         - linux/amd64
-      # args:
-      #   # Optional build-time URL overrides (used for static asset generation).
-      #   # Runtime URLs are still controlled by *_DOMAIN / USE_HTTPS below.
-      #   API_URI: ${BUILD_API_URI:-https://next-api.useplunk.com}
-      #   DASHBOARD_URI: ${BUILD_DASHBOARD_URI:-https://next-app.useplunk.com}
-      #   LANDING_URI: ${BUILD_LANDING_URI:-https://www.useplunk.com}
-      #   WIKI_URI: ${BUILD_WIKI_URI:-https://docs.useplunk.com}
+      args:
+        # ===========================================================
+        # Build-time URL configuration
+        # ===========================================================
+        # Next.js inlines `process.env.NEXT_PUBLIC_*` at build time, so these
+        # MUST be passed as build args - they can't be set at runtime.
+        # Reads from the same NEXT_PUBLIC_* vars you set in Coolify.
+        # Falls back to useplunk.com placeholders so the runtime URL
+        # replacement script can swap them via *_DOMAIN env vars below.
+        API_URI: ${NEXT_PUBLIC_API_URI:-https://next-api.useplunk.com}
+        DASHBOARD_URI: ${NEXT_PUBLIC_DASHBOARD_URI:-https://next-app.useplunk.com}
+        LANDING_URI: ${NEXT_PUBLIC_LANDING_URI:-https://www.useplunk.com}
+        WIKI_URI: ${NEXT_PUBLIC_WIKI_URI:-https://docs.useplunk.com}
     container_name: plunk
     restart: unless-stopped
     environment:
@@ -154,11 +160,20 @@ services:
       USE_HTTPS: ${USE_HTTPS:-false}
 
       # Application URLs (auto-configured by setup-nginx.sh from domains above)
-      # You can override these if needed
-      API_URI: ${API_URI:-}
-      DASHBOARD_URI: ${DASHBOARD_URI:-}
-      LANDING_URI: ${LANDING_URI:-}
-      WIKI_URI: ${WIKI_URI:-}
+      # If NEXT_PUBLIC_* are set (used at build time), reuse them at runtime so
+      # the URL-replacement script knows the target URLs without you setting
+      # the same value twice. Explicit *_URI vars still win if provided.
+      API_URI: ${API_URI:-${NEXT_PUBLIC_API_URI:-}}
+      DASHBOARD_URI: ${DASHBOARD_URI:-${NEXT_PUBLIC_DASHBOARD_URI:-}}
+      LANDING_URI: ${LANDING_URI:-${NEXT_PUBLIC_LANDING_URI:-}}
+      WIKI_URI: ${WIKI_URI:-${NEXT_PUBLIC_WIKI_URI:-}}
+
+      # Pass NEXT_PUBLIC_* through to runtime as well (some Next.js code paths
+      # read them from process.env at runtime in the standalone server).
+      NEXT_PUBLIC_API_URI: ${NEXT_PUBLIC_API_URI:-}
+      NEXT_PUBLIC_DASHBOARD_URI: ${NEXT_PUBLIC_DASHBOARD_URI:-}
+      NEXT_PUBLIC_LANDING_URI: ${NEXT_PUBLIC_LANDING_URI:-}
+      NEXT_PUBLIC_WIKI_URI: ${NEXT_PUBLIC_WIKI_URI:-}
 
       # AWS SES (for sending emails)
       AWS_SES_REGION: ${AWS_SES_REGION}
