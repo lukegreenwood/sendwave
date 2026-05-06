@@ -116,13 +116,13 @@ services:
       # Coolify will build this on each deploy instead of pulling a prebuilt image.
       platforms:
         - linux/amd64
-      args:
-        # Optional build-time URL overrides (used for static asset generation).
-        # Runtime URLs are still controlled by *_DOMAIN / USE_HTTPS below.
-        API_URI: ${BUILD_API_URI:-https://next-api.useplunk.com}
-        DASHBOARD_URI: ${BUILD_DASHBOARD_URI:-https://next-app.useplunk.com}
-        LANDING_URI: ${BUILD_LANDING_URI:-https://www.useplunk.com}
-        WIKI_URI: ${BUILD_WIKI_URI:-https://docs.useplunk.com}
+      # args:
+      #   # Optional build-time URL overrides (used for static asset generation).
+      #   # Runtime URLs are still controlled by *_DOMAIN / USE_HTTPS below.
+      #   API_URI: ${BUILD_API_URI:-https://next-api.useplunk.com}
+      #   DASHBOARD_URI: ${BUILD_DASHBOARD_URI:-https://next-app.useplunk.com}
+      #   LANDING_URI: ${BUILD_LANDING_URI:-https://www.useplunk.com}
+      #   WIKI_URI: ${BUILD_WIKI_URI:-https://docs.useplunk.com}
     container_name: plunk
     restart: unless-stopped
     environment:
