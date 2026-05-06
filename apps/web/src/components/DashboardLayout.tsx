@@ -162,7 +162,7 @@ export function DashboardLayout({children}: DashboardLayoutProps) {
       <div className="h-16 flex items-center justify-between px-6 border-b border-neutral-200">
         <div className="flex items-center gap-2">
           <Image src="/assets/logo.png" alt="Plunk" width={28} height={28} className="rounded" />
-          <h1 className="text-xl font-bold text-neutral-900">Plunk</h1>
+          <h1 className="text-xl font-bold text-neutral-900">Sendwave</h1>
         </div>
         <button
           onClick={() => document.dispatchEvent(new KeyboardEvent('keydown', {key: 'k', metaKey: true, bubbles: true}))}
