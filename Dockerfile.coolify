@@ -104,13 +104,47 @@ RUN --mount=type=cache,id=plunk-yarn-berry,target=/root/.yarn/berry/cache,sharin
 # ============================================
 FROM node:20-slim AS builder
 
-# Build-time arguments for URL configuration
-# These are only used during the build (wiki OpenAPI generation, static assets).
-# Runtime URLs are configured via *_DOMAIN and USE_HTTPS at container startup.
+# Build-time arguments for URL configuration.
+# Two parallel sets of args:
+#   - API_URI / DASHBOARD_URI / LANDING_URI / WIKI_URI: legacy names used by
+#     wiki OpenAPI generation, sitemap scripts, and runtime URL replacement
+#     placeholders. Default to useplunk.com so the runtime replace-urls script
+#     has known sentinels to swap.
+#   - NEXT_PUBLIC_API_URI / NEXT_PUBLIC_DASHBOARD_URI / etc: Next.js inlines
+#     these into client-side bundles at build time. If set, they take priority
+#     and cause the build to bake real production URLs directly (no runtime
+#     replacement needed in JS bundles).
+# Coolify passes both forms automatically, so just declaring them here is enough.
 ARG API_URI=https://next-api.useplunk.com
 ARG DASHBOARD_URI=https://next-app.useplunk.com
 ARG LANDING_URI=https://www.useplunk.com
 ARG WIKI_URI=https://docs.useplunk.com
+ARG NEXT_PUBLIC_API_URI=
+ARG NEXT_PUBLIC_DASHBOARD_URI=
+ARG NEXT_PUBLIC_LANDING_URI=
+ARG NEXT_PUBLIC_WIKI_URI=
+
+# Resolve effective NEXT_PUBLIC_* values: prefer the explicit NEXT_PUBLIC_* if
+# provided, otherwise fall back to the legacy *_URI args (which themselves
+# default to the useplunk placeholders). This means whichever name the operator
+# sets, the build picks it up.
+ENV BUILD_NEXT_PUBLIC_API_URI=${NEXT_PUBLIC_API_URI:-${API_URI}} \
+    BUILD_NEXT_PUBLIC_DASHBOARD_URI=${NEXT_PUBLIC_DASHBOARD_URI:-${DASHBOARD_URI}} \
+    BUILD_NEXT_PUBLIC_LANDING_URI=${NEXT_PUBLIC_LANDING_URI:-${LANDING_URI}} \
+    BUILD_NEXT_PUBLIC_WIKI_URI=${NEXT_PUBLIC_WIKI_URI:-${WIKI_URI}}
+
+# Visible diagnostic so build logs make it obvious which URLs were used.
+RUN echo "============================================" && \
+    echo "Build-time URL configuration:" && \
+    echo "  API_URI=${API_URI}" && \
+    echo "  DASHBOARD_URI=${DASHBOARD_URI}" && \
+    echo "  LANDING_URI=${LANDING_URI}" && \
+    echo "  WIKI_URI=${WIKI_URI}" && \
+    echo "  NEXT_PUBLIC_API_URI=${BUILD_NEXT_PUBLIC_API_URI}" && \
+    echo "  NEXT_PUBLIC_DASHBOARD_URI=${BUILD_NEXT_PUBLIC_DASHBOARD_URI}" && \
+    echo "  NEXT_PUBLIC_LANDING_URI=${BUILD_NEXT_PUBLIC_LANDING_URI}" && \
+    echo "  NEXT_PUBLIC_WIKI_URI=${BUILD_NEXT_PUBLIC_WIKI_URI}" && \
+    echo "============================================"
 
 WORKDIR /app
 
@@ -146,10 +180,10 @@ RUN --mount=type=cache,target=/app/.turbo,sharing=locked \
     DASHBOARD_URI=${DASHBOARD_URI} \
     LANDING_URI=${LANDING_URI} \
     WIKI_URI=${WIKI_URI} \
-    NEXT_PUBLIC_API_URI=${API_URI} \
-    NEXT_PUBLIC_DASHBOARD_URI=${DASHBOARD_URI} \
-    NEXT_PUBLIC_LANDING_URI=${LANDING_URI} \
-    NEXT_PUBLIC_WIKI_URI=${WIKI_URI} \
+    NEXT_PUBLIC_API_URI=${BUILD_NEXT_PUBLIC_API_URI} \
+    NEXT_PUBLIC_DASHBOARD_URI=${BUILD_NEXT_PUBLIC_DASHBOARD_URI} \
+    NEXT_PUBLIC_LANDING_URI=${BUILD_NEXT_PUBLIC_LANDING_URI} \
+    NEXT_PUBLIC_WIKI_URI=${BUILD_NEXT_PUBLIC_WIKI_URI} \
     yarn turbo build --filter="@plunk/*"
 
 # Step 2: Copy and build API (backend services)
@@ -160,10 +194,10 @@ RUN --mount=type=cache,target=/app/.turbo,sharing=locked \
     DASHBOARD_URI=${DASHBOARD_URI} \
     LANDING_URI=${LANDING_URI} \
     WIKI_URI=${WIKI_URI} \
-    NEXT_PUBLIC_API_URI=${API_URI} \
-    NEXT_PUBLIC_DASHBOARD_URI=${DASHBOARD_URI} \
-    NEXT_PUBLIC_LANDING_URI=${LANDING_URI} \
-    NEXT_PUBLIC_WIKI_URI=${WIKI_URI} \
+    NEXT_PUBLIC_API_URI=${BUILD_NEXT_PUBLIC_API_URI} \
+    NEXT_PUBLIC_DASHBOARD_URI=${BUILD_NEXT_PUBLIC_DASHBOARD_URI} \
+    NEXT_PUBLIC_LANDING_URI=${BUILD_NEXT_PUBLIC_LANDING_URI} \
+    NEXT_PUBLIC_WIKI_URI=${BUILD_NEXT_PUBLIC_WIKI_URI} \
     yarn turbo build --filter=api --filter=smtp
 
 # Step 3: Copy and build Wiki (includes API doc generation)
@@ -178,12 +212,12 @@ RUN --mount=type=cache,target=/app/.turbo,sharing=locked \
     DASHBOARD_URI=${DASHBOARD_URI} \
     LANDING_URI=${LANDING_URI} \
     WIKI_URI=${WIKI_URI} \
-    NEXT_PUBLIC_API_URI=${API_URI} \
-    NEXT_PUBLIC_DASHBOARD_URI=${DASHBOARD_URI} \
-    NEXT_PUBLIC_LANDING_URI=${LANDING_URI} \
-    NEXT_PUBLIC_WIKI_URI=${WIKI_URI} \
+    NEXT_PUBLIC_API_URI=${BUILD_NEXT_PUBLIC_API_URI} \
+    NEXT_PUBLIC_DASHBOARD_URI=${BUILD_NEXT_PUBLIC_DASHBOARD_URI} \
+    NEXT_PUBLIC_LANDING_URI=${BUILD_NEXT_PUBLIC_LANDING_URI} \
+    NEXT_PUBLIC_WIKI_URI=${BUILD_NEXT_PUBLIC_WIKI_URI} \
     yarn turbo build --filter=wiki
-RUN NEXT_PUBLIC_WIKI_URI=${WIKI_URI} yarn workspace wiki sitemap
+RUN NEXT_PUBLIC_WIKI_URI=${BUILD_NEXT_PUBLIC_WIKI_URI} yarn workspace wiki sitemap
 RUN generate-url-manifest.sh wiki /app/apps/wiki
 
 # Step 4: Copy and build Web dashboard
@@ -193,12 +227,12 @@ RUN --mount=type=cache,target=/app/.turbo,sharing=locked \
     DASHBOARD_URI=${DASHBOARD_URI} \
     LANDING_URI=${LANDING_URI} \
     WIKI_URI=${WIKI_URI} \
-    NEXT_PUBLIC_API_URI=${API_URI} \
-    NEXT_PUBLIC_DASHBOARD_URI=${DASHBOARD_URI} \
-    NEXT_PUBLIC_LANDING_URI=${LANDING_URI} \
-    NEXT_PUBLIC_WIKI_URI=${WIKI_URI} \
+    NEXT_PUBLIC_API_URI=${BUILD_NEXT_PUBLIC_API_URI} \
+    NEXT_PUBLIC_DASHBOARD_URI=${BUILD_NEXT_PUBLIC_DASHBOARD_URI} \
+    NEXT_PUBLIC_LANDING_URI=${BUILD_NEXT_PUBLIC_LANDING_URI} \
+    NEXT_PUBLIC_WIKI_URI=${BUILD_NEXT_PUBLIC_WIKI_URI} \
     yarn turbo build --filter=web
-RUN NEXT_PUBLIC_DASHBOARD_URI=${DASHBOARD_URI} yarn workspace web sitemap
+RUN NEXT_PUBLIC_DASHBOARD_URI=${BUILD_NEXT_PUBLIC_DASHBOARD_URI} yarn workspace web sitemap
 RUN generate-url-manifest.sh web /app/apps/web
 
 # Step 5: Copy and build Landing page
@@ -208,12 +242,12 @@ RUN --mount=type=cache,target=/app/.turbo,sharing=locked \
     DASHBOARD_URI=${DASHBOARD_URI} \
     LANDING_URI=${LANDING_URI} \
     WIKI_URI=${WIKI_URI} \
-    NEXT_PUBLIC_API_URI=${API_URI} \
-    NEXT_PUBLIC_DASHBOARD_URI=${DASHBOARD_URI} \
-    NEXT_PUBLIC_LANDING_URI=${LANDING_URI} \
-    NEXT_PUBLIC_WIKI_URI=${WIKI_URI} \
+    NEXT_PUBLIC_API_URI=${BUILD_NEXT_PUBLIC_API_URI} \
+    NEXT_PUBLIC_DASHBOARD_URI=${BUILD_NEXT_PUBLIC_DASHBOARD_URI} \
+    NEXT_PUBLIC_LANDING_URI=${BUILD_NEXT_PUBLIC_LANDING_URI} \
+    NEXT_PUBLIC_WIKI_URI=${BUILD_NEXT_PUBLIC_WIKI_URI} \
     yarn turbo build --filter=landing
-RUN NEXT_PUBLIC_LANDING_URI=${LANDING_URI} yarn workspace landing sitemap
+RUN NEXT_PUBLIC_LANDING_URI=${BUILD_NEXT_PUBLIC_LANDING_URI} yarn workspace landing sitemap
 RUN generate-url-manifest.sh landing /app/apps/landing
 
 # Copy any remaining root files (if needed)
