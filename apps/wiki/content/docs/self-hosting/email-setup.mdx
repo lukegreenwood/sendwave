@@ -76,12 +76,13 @@ Once you have configured AWS SES with the above settings, you can add and verify
 
 ## 6. Inbound Email (Optional)
 
-Plunk can receive emails sent to your verified domains and turn them into `email.received` events that trigger workflows. This is **optional** — only configure this if you want users to be able to receive inbound mail.
+Plunk can receive emails sent to your verified domains and turn them into `email.received` events that trigger workflows. This is **optional** — only configure this if you want users to be able to receive inbound mail. See also Plunk's [Receiving emails](/guides/receiving-emails) guide.
 
 <Callout title="Region availability" variant="warning">
   AWS SES inbound (Email Receiving) is only available in a subset of SES regions — check the
   [AWS documentation](https://docs.aws.amazon.com/ses/latest/dg/regions.html) for the current list. Your
-  `AWS_SES_REGION` must be one of the inbound-supported regions, otherwise inbound mail will not work.
+  `AWS_SES_REGION` must be one of the inbound-supported regions, otherwise inbound mail will not work. If your region
+  doesn't support inbound, you can keep outbound on your current region and run a separate identity in a region that does.
 </Callout>
 
 ### 6.1 Extend the IAM Policy
@@ -138,7 +139,7 @@ SES allows only **one active receipt rule set per region**. If you already have 
 2. Name: `plunk-inbound`
 3. Create a new rule:
    - Name: `plunk-deliver-inbound`
-   - **Recipient conditions**: leave empty to catch every verified domain, or add specific domains/addresses
+   - **Recipient conditions**: leave empty to catch every verified domain, or add specific domains/addresses (e.g. `*@yourdomain.com`)
    - **Actions** (in order):
      1. **Deliver to Amazon SNS topic**
         - Topic: `plunk-ses-inbound`
@@ -173,4 +174,20 @@ Plunk shows this record on the **Domains** tab in project settings once a domain
 4. Confirm the workflow execution appears in the dashboard
 
 If the SNS subscription is stuck in "Pending confirmation", check the API logs for the `SubscribeURL` and verify your `api.yourdomain.com` endpoint is publicly reachable over HTTPS.
+
+## 7. (Optional) Move Out of the SES Sandbox
+
+By default, new AWS SES accounts are in **sandbox mode** with strict limits:
+
+- Send only to **verified** addresses
+- 200 messages per 24 hours
+- 1 message per second
+
+Sandbox is fine for testing but useless for production. Request production access in the SES console (**Account dashboard** → **Request production access**) — AWS typically approves within 24 hours after a short questionnaire about your sending practices.
+
+After approval, your sending quota will reflect a much higher daily and per-second limit specific to your account.
+
+## 8. (Optional) Configure a MAIL FROM Domain
+
+For better DMARC alignment, you can configure a custom MAIL FROM subdomain (e.g. `mail.yourdomain.com`). In the SES console under **Verified identities** → your domain → **MAIL FROM domain**, set a subdomain and add the additional MX and TXT records SES displays. Plunk's IAM policy already includes `ses:SetIdentityMailFromDomain` to support this.
 
