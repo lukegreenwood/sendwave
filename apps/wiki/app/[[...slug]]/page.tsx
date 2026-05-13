@@ -26,6 +26,13 @@ export default async function Page(props: {params: Promise<{slug?: string[]}>}) 
           markdownUrl={`/llms.mdx${page.url}`}
           githubUrl={`https://github.com/useplunk/plunk/blob/next/apps/wiki/content/docs/${page.path}`}
         />
+        <p className="ml-auto hidden text-[11px] text-fd-muted-foreground sm:block">
+          Reading this with electronic eyes? Add{' '}
+          <a href={`${page.url}.md`} className="underline decoration-dotted underline-offset-2 transition hover:text-fd-foreground">
+            <code>.md</code>
+          </a>{' '}
+          for the Markdown cut.
+        </p>
       </div>
 
       <DocsBody>
@@ -57,6 +64,11 @@ export async function generateMetadata(props: {params: Promise<{slug?: string[]}
   return {
     title: page.data.title,
     description: page.data.description,
+    alternates: {
+      types: {
+        'text/markdown': `${page.url}.md`,
+      },
+    },
     openGraph: {
       images: [{url: ogUrl.toString(), width: 1200, height: 630}],
     },

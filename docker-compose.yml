@@ -154,6 +154,10 @@ services:
       SES_CONFIGURATION_SET: ${SES_CONFIGURATION_SET}
       SES_CONFIGURATION_SET_NO_TRACKING: ${SES_CONFIGURATION_SET_NO_TRACKING:-}
 
+      # Custom MAIL FROM subdomain (defaults to 'plunk'; override when
+      # plunk.<your-domain> is already used for something else, e.g. a CDN)
+      MAIL_FROM_SUBDOMAIN: ${MAIL_FROM_SUBDOMAIN:-}
+
       # Optional: OAuth
       GITHUB_OAUTH_CLIENT: ${GITHUB_OAUTH_CLIENT:-}
       GITHUB_OAUTH_SECRET: ${GITHUB_OAUTH_SECRET:-}
@@ -189,6 +193,14 @@ services:
 
       # Security
       AUTO_PROJECT_DISABLE: ${AUTO_PROJECT_DISABLE:-false}
+
+      # Self-hosting user management (documented in .env.self-host.example
+      # and read by apps/api/src/app/constants.ts at import time)
+      DISABLE_SIGNUPS: ${DISABLE_SIGNUPS:-false}
+
+      # Explicit SES sending rate (avoid silent fallback to 14/sec when
+      # ses:GetSendQuota is denied or transiently fails at worker startup)
+      EMAIL_RATE_LIMIT_PER_SECOND: ${EMAIL_RATE_LIMIT_PER_SECOND:-}
 
     volumes:
       # Persistent storage for application data
