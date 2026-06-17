@@ -10,6 +10,7 @@ import {
   type SMTPServerOptions,
   type SMTPServerSession,
 } from 'smtp-server';
+import {timingSafeEqual} from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -24,6 +25,20 @@ const PORT_SECURE = parseInt(process.env.PORT_SECURE ?? '465', 10);
 const PORT_SUBMISSION = parseInt(process.env.PORT_SUBMISSION ?? '587', 10);
 const CERT_PATH = process.env.CERT_PATH ?? '/certs';
 const ACME_JSON_PATH = process.env.ACME_JSON_PATH ?? path.join(CERT_PATH, 'acme.json');
+
+// Short-password alias for legacy SMTP clients that can't carry a full-length API key.
+// When both are set, an SMTP AUTH password matching SMTP_ALIAS_PASSWORD is swapped
+// for SMTP_ALIAS_SECRET before the project lookup.
+const SMTP_ALIAS_PASSWORD = process.env.SMTP_ALIAS_PASSWORD ?? '';
+const SMTP_ALIAS_SECRET = process.env.SMTP_ALIAS_SECRET ?? '';
+const ALIAS_ENABLED = SMTP_ALIAS_PASSWORD !== '' && SMTP_ALIAS_SECRET !== '';
+
+function constantTimeEquals(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 // Extended session interface to store authenticated project
 interface ExtendedSession extends SMTPServerSession {
@@ -158,10 +173,17 @@ async function handleAuth(
       return callback(new Error('Invalid username'));
     }
 
+    // Resolve the alias if configured and matched (for legacy clients with
+    // short password limits). The real project secret is what we look up.
+    let resolvedPassword = auth.password;
+    if (ALIAS_ENABLED && auth.password && constantTimeEquals(auth.password, SMTP_ALIAS_PASSWORD)) {
+      resolvedPassword = SMTP_ALIAS_SECRET;
+    }
+
     // Validate API key (project secret)
     const project = await prisma.project.findUnique({
       where: {
-        secret: auth.password,
+        secret: resolvedPassword,
       },
       select: {
         id: true,
@@ -501,6 +523,16 @@ function validateEnvironment(): void {
     process.exit(1);
   }
 
+  // Validate alias configuration: both or neither, and they must differ.
+  if ((SMTP_ALIAS_PASSWORD === '') !== (SMTP_ALIAS_SECRET === '')) {
+    signale.fatal('SMTP_ALIAS_PASSWORD and SMTP_ALIAS_SECRET must both be set or both be empty');
+    process.exit(1);
+  }
+  if (ALIAS_ENABLED && SMTP_ALIAS_PASSWORD === SMTP_ALIAS_SECRET) {
+    signale.fatal('SMTP_ALIAS_PASSWORD must differ from SMTP_ALIAS_SECRET');
+    process.exit(1);
+  }
+
   signale.success('Environment configuration validated');
 }
 
@@ -518,6 +550,10 @@ async function main(): Promise<void> {
 
   if (SMTP_DOMAIN) {
     signale.info(`SMTP domain: ${SMTP_DOMAIN}`);
+  }
+
+  if (ALIAS_ENABLED) {
+    signale.info(`SMTP password alias enabled (length=${SMTP_ALIAS_PASSWORD.length})`);
   }
 
   const certs = await getCertificates();
