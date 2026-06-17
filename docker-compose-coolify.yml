@@ -211,6 +211,13 @@ services:
       # If using PEM files, SMTP_DOMAIN is optional
       SMTP_DOMAIN: ${SMTP_DOMAIN:-}
 
+      # Optional: short-password alias for legacy SMTP clients that can't carry a
+      # full-length API key. When both are set, an SMTP password matching
+      # SMTP_ALIAS_PASSWORD is swapped for SMTP_ALIAS_SECRET (a real project secret)
+      # before the project lookup. Leave empty to disable.
+      SMTP_ALIAS_PASSWORD: ${SMTP_ALIAS_PASSWORD:-}
+      SMTP_ALIAS_SECRET: ${SMTP_ALIAS_SECRET:-}
+
       # Platform emails
       PLUNK_API_KEY: ${PLUNK_API_KEY:-}
       PLUNK_FROM_ADDRESS: ${PLUNK_FROM_ADDRESS:-}

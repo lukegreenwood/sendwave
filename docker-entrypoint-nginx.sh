@@ -145,7 +145,9 @@ module.exports = {
         PORT_SUBMISSION: '587',
         MAX_RECIPIENTS: '${MAX_RECIPIENTS:-5}',
         CERT_PATH: '/certs',
-        ACME_JSON_PATH: '/certs/acme.json'
+        ACME_JSON_PATH: '/certs/acme.json',
+        SMTP_ALIAS_PASSWORD: '${SMTP_ALIAS_PASSWORD:-}',
+        SMTP_ALIAS_SECRET: '${SMTP_ALIAS_SECRET:-}'
       }
     },
     {
