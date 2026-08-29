@@ -5,6 +5,7 @@ import {ContactSchemas} from '@plunk/shared';
 import type {BulkContactActionSelector} from '@plunk/types';
 import signale from 'signale';
 import {requireAuth, requireEmailVerified} from '../middleware/auth.js';
+import {contactWriteRateLimit} from '../middleware/rateLimit.js';
 import {ContactService} from '../services/ContactService.js';
 import {QueueService} from '../services/QueueService.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
@@ -23,6 +24,19 @@ const upload = multer({
     }
   },
 });
+
+/**
+ * Read the `e` parameter the public list-management pages forward: the id of the
+ * email the recipient acted from. Optional — mail sent before the parameter
+ * existed, and hand-built links, carry no source.
+ *
+ * Unverified here; {@link ContactService.subscribe} / {@link ContactService.unsubscribe}
+ * confirm the email belongs to the contact before recording it.
+ */
+function readSourceEmailId(req: Request): string | undefined {
+  const value = req.query.e;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
 
 @Controller('contacts')
 export class Contacts {
@@ -139,7 +153,7 @@ export class Contacts {
    * Create or update a contact (upsert)
    */
   @Post('')
-  @Middleware([requireAuth, requireEmailVerified])
+  @Middleware([requireAuth, requireEmailVerified, contactWriteRateLimit])
   @CatchAsync
   public async create(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
@@ -169,7 +183,7 @@ export class Contacts {
    * Update a contact
    */
   @Patch(':id')
-  @Middleware([requireAuth, requireEmailVerified])
+  @Middleware([requireAuth, requireEmailVerified, contactWriteRateLimit])
   @CatchAsync
   public async update(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
@@ -190,7 +204,7 @@ export class Contacts {
    * Delete a contact
    */
   @Delete(':id')
-  @Middleware([requireAuth, requireEmailVerified])
+  @Middleware([requireAuth, requireEmailVerified, contactWriteRateLimit])
   @CatchAsync
   public async delete(req: Request, res: Response, _next: NextFunction) {
     const auth = res.locals.auth;
@@ -254,7 +268,7 @@ export class Contacts {
       return res.status(400).json({error: 'Contact ID is required'});
     }
 
-    const contact = await ContactService.subscribe(contactId);
+    const contact = await ContactService.subscribe(contactId, {emailId: readSourceEmailId(req)});
 
     return res.status(200).json({
       id: contact.id,
@@ -276,7 +290,7 @@ export class Contacts {
       return res.status(400).json({error: 'Contact ID is required'});
     }
 
-    const contact = await ContactService.unsubscribe(contactId);
+    const contact = await ContactService.unsubscribe(contactId, {emailId: readSourceEmailId(req)});
 
     return res.status(200).json({
       id: contact.id,

@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
   IconSpinner,
+  Skeleton,
   StickySaveBar,
 } from '@plunk/ui';
 import type {Campaign, Segment} from '@plunk/db';
@@ -39,17 +40,15 @@ import {network} from '../../lib/network';
 import {formatFullDateTime, formatUTCDateTime, getUserTimezone, schedulePresets} from '../../lib/dateUtils';
 import {useChangeTracking} from '../../lib/hooks/useChangeTracking';
 import {
+  AlertCircle,
   ArrowLeft,
   Calendar,
   ChevronDown,
   Info,
-  Mail,
-  MousePointer,
   Save,
   Send,
   TestTube,
   Trash2,
-  TrendingUp,
   TriangleAlert,
   Users,
   XCircle,
@@ -70,11 +69,38 @@ interface CampaignStats {
   openedCount: number;
   clickedCount: number;
   bouncedCount: number;
+  complainedCount: number;
+  unsubscribedCount: number;
   openRate: number;
   clickRate: number;
   bounceRate: number;
   deliveryRate: number;
+  complaintRate: number;
+  unsubscribeRate: number;
 }
+
+/**
+ * Reach figures supporting the headline, in funnel order. Opens are excluded because they
+ * are the headline; "sent" is excluded because it is always 100% of itself and already
+ * stated in the card description, so a row for it can never tell the reader anything.
+ *
+ * Every rate is measured against sentCount, the denominator the stats endpoint documents.
+ */
+const REACH_FIGURES: {label: string; count: (s: CampaignStats) => number; rate: (s: CampaignStats) => number}[] = [
+  {label: 'delivered', count: s => s.deliveredCount, rate: s => s.deliveryRate},
+  {label: 'clicked', count: s => s.clickedCount, rate: s => s.clickRate},
+];
+
+/**
+ * The three ways this campaign cost a contact. Each suppresses the contact from future
+ * marketing, and no recipient appears in more than one -- a bounce or complaint is never
+ * also counted as an unsubscribe -- so the three add up.
+ */
+const LOST_REASONS: {label: string; count: (s: CampaignStats) => number}[] = [
+  {label: 'bounced', count: s => s.bouncedCount},
+  {label: 'marked it as spam', count: s => s.complainedCount},
+  {label: 'unsubscribed', count: s => s.unsubscribedCount},
+];
 
 export default function CampaignDetailsPage() {
   const router = useRouter();
@@ -87,7 +113,11 @@ export default function CampaignDetailsPage() {
     isLoading,
   } = useSWR<{data: Campaign}>(id ? `/campaigns/${id}` : null, {revalidateOnFocus: false});
 
-  const {data: stats} = useSWR<{data: CampaignStats}>(
+  const {
+    data: stats,
+    error: statsError,
+    mutate: mutateStats,
+  } = useSWR<{data: CampaignStats}>(
     id && campaign?.data.status !== CampaignStatus.DRAFT ? `/campaigns/${id}/stats` : null,
     {
       revalidateOnFocus: false,
@@ -127,20 +157,20 @@ export default function CampaignDetailsPage() {
   const handleCancel = async () => {
     try {
       await network.fetch('POST', `/campaigns/${id}/cancel`);
-      toast.success('Campaign cancelled successfully');
+      toast.success('Campaign canceled');
       void mutate();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to cancel campaign');
+      toast.error(error instanceof Error ? error.message : 'Couldn’t cancel the campaign. Try again.');
     }
   };
 
   const handleDelete = async () => {
     try {
       await network.fetch('DELETE', `/campaigns/${id}`);
-      toast.success('Campaign deleted successfully');
+      toast.success('Campaign deleted');
       void router.push('/campaigns');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to delete campaign');
+      toast.error(error instanceof Error ? error.message : 'Couldn’t delete the campaign. Try again.');
     }
   };
 
@@ -150,7 +180,7 @@ export default function CampaignDetailsPage() {
       toast.success('Campaign is being sent!');
       void mutate();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to send campaign');
+      toast.error(error instanceof Error ? error.message : 'Couldn’t send the campaign. Try again.');
     }
   };
 
@@ -183,7 +213,7 @@ export default function CampaignDetailsPage() {
       setSelectedPreset(null);
       void mutate();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to schedule campaign');
+      toast.error(error instanceof Error ? error.message : 'Couldn’t schedule the campaign. Try again.');
     }
   };
 
@@ -204,7 +234,7 @@ export default function CampaignDetailsPage() {
       setDialog({type: 'none'});
       setTestEmailAddress('');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to send test email');
+      toast.error(error instanceof Error ? error.message : 'Couldn’t send the test email. Try again.');
     } finally {
       setDialog(d => (d.type === 'testEmail' ? {type: 'testEmail', sending: false} : d));
     }
@@ -249,7 +279,7 @@ export default function CampaignDetailsPage() {
         });
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update campaign');
+      toast.error(error instanceof Error ? error.message : 'Couldn’t save the campaign. Try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -337,6 +367,10 @@ export default function CampaignDetailsPage() {
 
   const c = campaign.data;
   const s = stats?.data;
+  // Safe to add: the three counts are mutually exclusive per recipient.
+  const lostContacts = s ? s.bouncedCount + s.complainedCount + s.unsubscribedCount : 0;
+  // A scheduled campaign has stats, but they are all zero until it starts sending.
+  const hasResults = c.status === CampaignStatus.SENDING || c.status === CampaignStatus.SENT;
 
   // Get recipient count for draft campaigns from the campaign's totalRecipients field
   // The backend calculates this for all audience types when the campaign is created/updated
@@ -360,7 +394,7 @@ export default function CampaignDetailsPage() {
                   <Badge variant="secondary">Draft</Badge>
                 </div>
                 <p className="text-neutral-500 mt-1 text-sm sm:text-base">
-                  Make changes to your campaign before sending
+                  Not sent yet. Edit freely.
                 </p>
               </div>
             </div>
@@ -390,7 +424,7 @@ export default function CampaignDetailsPage() {
                   className="flex-1 sm:flex-none"
                 >
                   <Save className="h-4 w-4" />
-                  <span className="hidden sm:inline">{isSubmitting ? 'Saving...' : 'Save'}</span>
+                  <span className="hidden sm:inline">{isSubmitting ? 'Saving…' : 'Save'}</span>
                   <span className="sm:hidden">Save</span>
                 </Button>
                 <DropdownMenu>
@@ -406,7 +440,7 @@ export default function CampaignDetailsPage() {
                       <div className="flex items-start gap-3">
                         <TestTube className="h-4 w-4 mt-0.5 text-neutral-700" />
                         <div className="flex flex-col gap-0.5 flex-1">
-                          <span className="font-medium text-sm">Send Test Email</span>
+                          <span className="font-medium text-sm">Send test email</span>
                           <span className="text-xs text-neutral-500 leading-snug">
                             Preview in your inbox before sending
                           </span>
@@ -417,7 +451,7 @@ export default function CampaignDetailsPage() {
                       <div className="flex items-start gap-3">
                         <Send className="h-4 w-4 mt-0.5 text-neutral-700" />
                         <div className="flex flex-col gap-0.5 flex-1">
-                          <span className="font-medium text-sm">Send Now</span>
+                          <span className="font-medium text-sm">Send now</span>
                           <span className="text-xs text-neutral-500 leading-snug">
                             Send immediately to all recipients
                           </span>
@@ -428,7 +462,7 @@ export default function CampaignDetailsPage() {
                       <div className="flex items-start gap-3">
                         <Calendar className="h-4 w-4 mt-0.5 text-neutral-700" />
                         <div className="flex flex-col gap-0.5 flex-1">
-                          <span className="font-medium text-sm">Schedule for Later</span>
+                          <span className="font-medium text-sm">Schedule for later</span>
                           <span className="text-xs text-neutral-500 leading-snug">Choose a specific date and time</span>
                         </div>
                       </div>
@@ -483,7 +517,7 @@ export default function CampaignDetailsPage() {
                       />
                       <SelectItemWithDescription
                         value={CampaignAudienceType.SEGMENT}
-                        title="Specific Segment"
+                        title="Specific segment"
                         description="Target a defined group of contacts"
                       />
                     </SelectContent>
@@ -558,7 +592,7 @@ export default function CampaignDetailsPage() {
             {/* Basic Information */}
             <Card>
               <CardHeader>
-                <CardTitle>Basic Information</CardTitle>
+                <CardTitle>Basic information</CardTitle>
                 <CardDescription>Name and describe your campaign</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -579,7 +613,7 @@ export default function CampaignDetailsPage() {
                   <Label htmlFor="description">Description</Label>
                   <Input
                     id="description"
-                    placeholder="Internal notes about this campaign"
+                    placeholder="e.g., Q2 launch, list A"
                     value={editedCampaign.description || ''}
                     onChange={e => setEditedCampaign({...editedCampaign, description: e.target.value})}
                   />
@@ -590,7 +624,7 @@ export default function CampaignDetailsPage() {
             {/* Campaign Type */}
             <Card>
               <CardHeader>
-                <CardTitle>Campaign Type</CardTitle>
+                <CardTitle>Campaign type</CardTitle>
                 <CardDescription>Choose how this campaign should be treated</CardDescription>
               </CardHeader>
               <CardContent>
@@ -644,7 +678,7 @@ export default function CampaignDetailsPage() {
           {/* Email Settings */}
           <Card>
             <CardHeader>
-              <CardTitle>Email Settings</CardTitle>
+              <CardTitle>Email settings</CardTitle>
               <CardDescription>Configure sender information and subject</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -676,7 +710,7 @@ export default function CampaignDetailsPage() {
           {/* Email Content */}
           <Card className="overflow-visible">
             <CardHeader>
-              <CardTitle>Email Content</CardTitle>
+              <CardTitle>Email content</CardTitle>
               <CardDescription>Design your email message</CardDescription>
             </CardHeader>
             <CardContent>
@@ -686,6 +720,11 @@ export default function CampaignDetailsPage() {
                   setEditedCampaign({...editedCampaign, body});
                   setHasChanges(true);
                 }}
+                segmentId={
+                  (editedCampaign.audienceType ?? c.audienceType) === CampaignAudienceType.SEGMENT
+                    ? (editedCampaign.segmentId ?? c.segmentId ?? undefined)
+                    : undefined
+                }
               />
             </CardContent>
           </Card>
@@ -754,7 +793,7 @@ export default function CampaignDetailsPage() {
                   disabled={(dialog.type === 'testEmail' && dialog.sending) || !testEmailAddress}
                 >
                   <TestTube className="h-4 w-4" />
-                  {dialog.type === 'testEmail' && dialog.sending ? 'Sending...' : 'Send preview'}
+                  {dialog.type === 'testEmail' && dialog.sending ? 'Sending…' : 'Send preview'}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -950,9 +989,9 @@ export default function CampaignDetailsPage() {
           open={dialog.type === 'delete'}
           onOpenChange={open => !open && setDialog({type: 'none'})}
           onConfirm={handleDelete}
-          title="Delete Campaign"
-          description="Are you sure you want to delete this draft campaign? This action cannot be undone."
-          confirmText="Delete Campaign"
+          title={`Delete ${c.name}?`}
+          description="This draft and its content are gone for good."
+          confirmText="Delete campaign"
           variant="destructive"
         />
       </DashboardLayout>
@@ -984,7 +1023,7 @@ export default function CampaignDetailsPage() {
             <div className="flex justify-end">
               <Button variant="destructive" onClick={() => setDialog({type: 'cancel'})} className="w-full sm:w-auto">
                 <XCircle className="h-4 w-4" />
-                <span className="hidden sm:inline">Cancel Campaign</span>
+                <span className="hidden sm:inline">Cancel campaign</span>
                 <span className="sm:hidden">Cancel</span>
               </Button>
             </div>
@@ -1016,64 +1055,136 @@ export default function CampaignDetailsPage() {
                     style={{width: `${(s.sentCount / s.totalRecipients) * 100}%`}}
                   />
                 </div>
-                <p className="text-xs text-neutral-400">This page updates automatically every 5 seconds</p>
+                <p className="text-xs text-neutral-400">Updating every 5 seconds</p>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Stats Cards */}
-        {s && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-neutral-500">Total Recipients</CardTitle>
-                <Users className="h-4 w-4 text-neutral-400" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold text-neutral-900">{s.totalRecipients.toLocaleString()}</div>
-                <p className="text-xs text-neutral-500 mt-2">
-                  {s.sentCount.toLocaleString()} sent ({((s.sentCount / s.totalRecipients) * 100).toFixed(1)}%)
+        {/* Results. Only from the moment sending starts: a scheduled campaign has nothing to
+            report yet, and its audience and send time are already in Campaign info below. */}
+        {hasResults && statsError && !s && (
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 text-red-700">
+                  <AlertCircle className="h-5 w-5 shrink-0" />
+                  <span>Couldn{"'"}t load results. Try again in a moment.</span>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => void mutateStats()}>
+                  Try again
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {hasResults && !s && !statsError && (
+          <Card>
+            <CardHeader>
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-4 w-72" />
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Skeleton className="h-10 w-40" />
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-2 w-full" />
+              </div>
+              <Skeleton className="h-4 w-full max-w-md" />
+              <Skeleton className="h-4 w-full max-w-lg" />
+            </CardContent>
+          </Card>
+        )}
+
+        {/*
+          One panel, one focal point. The previous version gave every metric the same weight,
+          which meant the reader had to scan the whole thing to find the answer. Opens are the
+          headline because "did anyone read it" is the question this screen exists to answer;
+          delivery is a hygiene check and lives in the supporting line, and the three ways a
+          contact was lost sit quietest of all, since on a healthy campaign they are all zero.
+
+          Every figure reads number-first ("11 delivered", not "Delivered ... 11") so the
+          numbers form a single scannable column instead of pairs separated by whitespace.
+        */}
+        {hasResults && s && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Results</CardTitle>
+              <CardDescription>
+                {`Sent to ${s.sentCount.toLocaleString()} ${s.sentCount === 1 ? 'contact' : 'contacts'}`}
+                {c.sentAt ? ` on ${formatFullDateTime(new Date(c.sentAt))}` : ''}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Headline */}
+              <div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-4xl font-bold tabular-nums text-neutral-900">
+                    {s.openedCount.toLocaleString()}
+                  </span>
+                  <span className="text-xl font-medium text-neutral-500">
+                    {s.openedCount === 1 ? 'open' : 'opens'}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-neutral-500">
+                  {s.sentCount > 0
+                    ? `${s.openRate.toFixed(1)}% of the ${s.sentCount.toLocaleString()} emails sent`
+                    : 'Nothing has been sent yet'}
                 </p>
-              </CardContent>
-            </Card>
+                {/* Decorative: the percentage above states the same value. */}
+                <div aria-hidden className="mt-3 h-2 w-full overflow-hidden rounded-full bg-neutral-100">
+                  <div
+                    className="h-full rounded-full bg-neutral-900"
+                    style={{width: `${Math.min(s.openRate, 100)}%`}}
+                  />
+                </div>
+              </div>
 
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-neutral-500">Delivery Rate</CardTitle>
-                <Mail className="h-4 w-4 text-neutral-400" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold text-neutral-900">{s.deliveryRate.toFixed(1)}%</div>
-                <p className="text-xs text-neutral-500 mt-2">
-                  {s.deliveredCount.toLocaleString()} delivered
-                  {s.bouncedCount > 0 && `, ${s.bouncedCount} bounced`}
+              {/* Supporting reach figures, in funnel order */}
+              <div className="flex flex-wrap gap-x-6 gap-y-2 border-t border-neutral-100 pt-4 text-sm">
+                {REACH_FIGURES.map(figure => (
+                  <span key={figure.label} className="text-neutral-500">
+                    <span className="font-medium tabular-nums text-neutral-900">
+                      {figure.count(s).toLocaleString()}
+                    </span>{' '}
+                    {figure.label}
+                    {s.sentCount > 0 && (
+                      <span className="tabular-nums"> ({figure.rate(s).toFixed(1)}%)</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+
+              {/* What it cost. Quietest row: on a healthy campaign every figure here is zero. */}
+              <div className="border-t border-neutral-100 pt-4">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+                  <span className="font-medium tabular-nums text-neutral-900">
+                    {lostContacts.toLocaleString()}
+                  </span>
+                  <span className="text-neutral-500">
+                    {lostContacts === 1 ? 'contact lost' : 'contacts lost'}
+                    {s.sentCount > 0 && lostContacts > 0
+                      ? ` (${((lostContacts / s.sentCount) * 100).toFixed(1)}%)`
+                      : ''}
+                  </span>
+                  {lostContacts > 0 && (
+                    <span className="text-neutral-500">
+                      —{' '}
+                      {LOST_REASONS.filter(reason => reason.count(s) > 0)
+                        .map(reason => `${reason.count(s).toLocaleString()} ${reason.label}`)
+                        .join(', ')}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-neutral-400">
+                  {lostContacts > 0
+                    ? 'These contacts no longer receive marketing from this project.'
+                    : 'Nobody bounced, complained, or unsubscribed.'}
                 </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-neutral-500">Open Rate</CardTitle>
-                <TrendingUp className="h-4 w-4 text-neutral-400" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold text-neutral-900">{s.openRate.toFixed(1)}%</div>
-                <p className="text-xs text-neutral-500 mt-2">{s.openedCount.toLocaleString()} opened</p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium text-neutral-500">Click Rate</CardTitle>
-                <MousePointer className="h-4 w-4 text-neutral-400" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold text-neutral-900">{s.clickRate.toFixed(1)}%</div>
-                <p className="text-xs text-neutral-500 mt-2">{s.clickedCount.toLocaleString()} clicked</p>
-              </CardContent>
-            </Card>
-          </div>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Campaign Details in Grid */}
@@ -1081,7 +1192,7 @@ export default function CampaignDetailsPage() {
           {/* Email Content - Takes 2 columns */}
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle>Email Preview</CardTitle>
+              <CardTitle>Email preview</CardTitle>
               <CardDescription>How your email will appear to recipients</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1109,7 +1220,7 @@ export default function CampaignDetailsPage() {
 
               {/* Email Body Preview */}
               <div>
-                <p className="text-sm font-medium text-neutral-700 mb-3">Message Content</p>
+                <p className="text-sm font-medium text-neutral-700 mb-3">Message content</p>
                 <div className="border-2 border-neutral-200 rounded-lg overflow-hidden bg-white">
                   <div className="p-6 max-h-96 overflow-y-auto">
                     <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(c.body)}} />
@@ -1122,7 +1233,7 @@ export default function CampaignDetailsPage() {
           {/* Campaign Details */}
           <Card>
             <CardHeader>
-              <CardTitle>Campaign Info</CardTitle>
+              <CardTitle>Campaign info</CardTitle>
               <CardDescription>Configuration and metadata</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1151,7 +1262,7 @@ export default function CampaignDetailsPage() {
               {/* Scheduling Info */}
               {c.scheduledFor && (
                 <div className="pb-3 border-b border-neutral-100">
-                  <p className="text-xs font-medium text-neutral-500 uppercase tracking-wide mb-2">Scheduled For</p>
+                  <p className="text-xs font-medium text-neutral-500 uppercase tracking-wide mb-2">Scheduled for</p>
                   <div className="flex items-start gap-2">
                     <Calendar className="h-4 w-4 text-neutral-400 mt-0.5" />
                     <div className="space-y-2">
@@ -1174,7 +1285,7 @@ export default function CampaignDetailsPage() {
               {/* Sent At */}
               {c.sentAt && (
                 <div className="pb-3 border-b border-neutral-100">
-                  <p className="text-xs font-medium text-neutral-500 uppercase tracking-wide mb-2">Sent On</p>
+                  <p className="text-xs font-medium text-neutral-500 uppercase tracking-wide mb-2">Sent on</p>
                   <div className="flex items-center gap-2">
                     <Send className="h-4 w-4 text-neutral-400" />
                     <p className="text-sm font-medium text-neutral-900">{formatFullDateTime(new Date(c.sentAt))}</p>
@@ -1190,9 +1301,10 @@ export default function CampaignDetailsPage() {
         open={dialog.type === 'cancel'}
         onOpenChange={open => !open && setDialog({type: 'none'})}
         onConfirm={handleCancel}
-        title="Cancel Campaign"
-        description="Are you sure you want to cancel this campaign?"
-        confirmText="Cancel Campaign"
+        title="Cancel this campaign?"
+        description="Sending stops now. Contacts who already received it keep their copy."
+        cancelText="Keep sending"
+        confirmText="Cancel campaign"
         variant="destructive"
       />
     </DashboardLayout>

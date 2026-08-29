@@ -25,7 +25,12 @@ COPY .yarn/releases ./.yarn/releases
 COPY package.json yarn.lock ./
 
 # Copy workspace package.json files
+# Every workspace listed in the root package.json must be present here, even if
+# it is never built or run in the image: `yarn install --immutable` re-resolves
+# the whole workspace graph and fails if a manifest is missing, because the
+# lockfile it produces would differ from the committed one.
 COPY apps/api/package.json ./apps/api/
+COPY apps/mcp/package.json ./apps/mcp/
 COPY apps/smtp/package.json ./apps/smtp/
 COPY apps/web/package.json ./apps/web/
 COPY apps/landing/package.json ./apps/landing/
@@ -128,7 +133,14 @@ COPY docker/generate-url-manifest.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/generate-url-manifest.sh
 
 # Step 1: Copy and build shared packages (these change less frequently)
-# Shared packages are dependencies for apps, so build them first
+# Shared packages are dependencies for apps, so build them first.
+#
+# Note on @plunk/mcp: despite the name it lives in apps/, and no stage copies
+# apps/mcp source into the builder, so the "@plunk/*" filter below never matches
+# it. Do not "fix" this with an explicit --filter="!@plunk/mcp" — turbo errors
+# with "No package found with name" when a negative filter names a workspace
+# that is not on disk. The MCP server is an stdio binary users run via
+# `npx @plunk/mcp`; it is published to npm by npm-publish.yml, not shipped here.
 COPY packages ./packages
 RUN yarn workspace @plunk/db db:generate
 RUN --mount=type=cache,target=/app/.turbo,sharing=locked \

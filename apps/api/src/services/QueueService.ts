@@ -4,13 +4,16 @@ import type {RedisOptions} from 'ioredis';
 import signale from 'signale';
 import type {
   ApiRequestCleanupJobData,
-  IdempotencyKeyCleanupJobData,
   BulkContactActionJobData,
   BulkContactActionSelector,
   CampaignBatchJobData,
+  CampaignStatsSweepJobData,
+  CardVerificationJobData,
+  CardVerificationSweepJobData,
   ContactImportJobData,
   DomainVerificationJobData,
   EmailBodyCleanupJobData,
+  IdempotencyKeyCleanupJobData,
   MeterEventJobData,
   ScheduledCampaignJobData,
   SegmentCountJobData,
@@ -199,6 +202,50 @@ export const meterQueue = new Queue<MeterEventJobData>('meter', {
     },
     removeOnComplete: 5000,
     removeOnFail: 10000,
+  },
+});
+
+// Retries here only cover soft failures (network, Stripe 5xx, issuer timeouts). A hard
+// decline is a verdict, not a failure, so the processor resolves it without throwing.
+export const cardVerificationQueue = new Queue<CardVerificationJobData>('card-verification', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 4,
+    backoff: {
+      type: 'exponential',
+      delay: 10000,
+    },
+    removeOnComplete: 500,
+    removeOnFail: 1000,
+  },
+});
+
+// Reconciles campaign counters against the email rows the events landed on. Retries are
+// pointless here beyond a transient blip: whatever is still dirty is swept again on the next
+// run, so a failed sweep costs a couple of minutes of staleness rather than data.
+export const campaignStatsSweepQueue = new Queue<CampaignStatsSweepJobData>('campaign-stats-sweep', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: {
+      type: 'exponential',
+      delay: 10000,
+    },
+    removeOnComplete: 20,
+    removeOnFail: 50,
+  },
+});
+
+export const cardVerificationSweepQueue = new Queue<CardVerificationSweepJobData>('card-verification-sweep', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 2,
+    backoff: {
+      type: 'exponential',
+      delay: 30000,
+    },
+    removeOnComplete: 20,
+    removeOnFail: 50,
   },
 });
 
@@ -395,6 +442,21 @@ export class QueueService {
         jobId: idempotencyKey ? `meter-${idempotencyKey}` : undefined,
       },
     );
+  }
+
+  /**
+   * Queue an off-session card verification charge for a freshly onboarded project.
+   *
+   * jobId is derived from the checkout session so a redelivered webhook cannot enqueue a
+   * second charge, backing up the Stripe-side idempotency key in the processor.
+   */
+  public static async queueCardVerification(
+    data: CardVerificationJobData,
+    jobId?: string,
+  ): Promise<Job<CardVerificationJobData>> {
+    return cardVerificationQueue.add('verify-card', data, {
+      jobId: jobId ?? `card-verification-${data.sessionId}`,
+    });
   }
 
   /**

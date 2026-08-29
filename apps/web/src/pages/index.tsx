@@ -25,6 +25,8 @@ import {
   Send,
   ShieldCheck,
   TrendingUp,
+  UserMinus,
+  UserPlus,
   Users,
   Workflow,
   XCircle,
@@ -155,6 +157,10 @@ function activityVisual(a: Activity): ActivityVisual {
       return {icon: AlertCircle, tone: 'red', label: 'Complaint'};
     case 'event.triggered':
       return {icon: Zap, tone: 'amber', label: 'Event'};
+    case 'contact.subscribed':
+      return {icon: UserPlus, tone: 'green', label: 'Subscribed'};
+    case 'contact.unsubscribed':
+      return {icon: UserMinus, tone: 'neutral', label: 'Unsubscribed'};
     case 'campaign.sent':
       return {icon: Mail, tone: 'neutral', label: 'Campaign'};
     case 'campaign.scheduled':
@@ -178,6 +184,15 @@ const TONE_CLASSES: Record<ActivityVisual['tone'], {bg: string; fg: string}> = {
 
 function activityTitle(a: Activity): string {
   const m = a.metadata;
+  // Subscription events store a reserved name (`contact.unsubscribed`) that
+  // would read as raw plumbing. Title them by the email they came from, which
+  // is the fact this row adds; the state is already on the label beside it.
+  if (a.type === 'contact.subscribed' || a.type === 'contact.unsubscribed') {
+    if (typeof m.sourceSubject === 'string' && m.sourceSubject) return m.sourceSubject;
+    if (typeof m.campaignName === 'string' && m.campaignName) return m.campaignName;
+    if (typeof m.workflowName === 'string' && m.workflowName) return m.workflowName;
+    return activityVisual(a).label;
+  }
   if (typeof m.subject === 'string' && m.subject) return m.subject;
   if (typeof m.eventName === 'string' && m.eventName) return m.eventName;
   if (typeof m.campaignName === 'string' && m.campaignName) return m.campaignName;
@@ -236,6 +251,27 @@ function CompactActivityRow({activity}: {activity: Activity}) {
     </motion.div>
   );
 }
+
+/**
+ * Reason-specific copy for the disabled banner. A card that refused recurring billing is
+ * something the owner can act on themselves, so saying so beats sending them to support.
+ */
+const DISABLED_COPY: Record<string, {detail: string; href: string}> = {
+  CARD_VERIFICATION_FAILED: {
+    detail:
+      'Add a card that supports recurring payments to continue. Yours took the first payment but declined the follow-up charge that confirms monthly billing works, which is common with prepaid, virtual, and single-use cards.',
+    href: '/settings?tab=billing',
+  },
+  PAYMENT_FAILED: {
+    detail: 'A recurring payment could not be processed. Update your payment method to re-enable the project.',
+    href: '/settings?tab=billing',
+  },
+};
+
+const DISABLED_COPY_FALLBACK = {
+  detail: 'Please contact support for more details and to get your project re-enabled.',
+  href: '/settings?tab=security',
+};
 
 export default function Index() {
   const {activeProject} = useActiveProject();
@@ -329,19 +365,19 @@ export default function Index() {
 
   const stats = [
     {
-      name: 'Total Contacts',
+      name: 'Total contacts',
       value: totalContacts,
       icon: Users,
       format: (n: number) => n.toLocaleString(),
     },
     {
-      name: 'Emails Sent',
+      name: 'Emails sent',
       value: totalEmailsSent,
       icon: Mail,
       format: (n: number) => n.toLocaleString(),
     },
     {
-      name: 'Open Rate',
+      name: 'Open rate',
       value: openRate,
       icon: TrendingUp,
       format: (n: number) => `${n.toFixed(1)}%`,
@@ -382,10 +418,10 @@ export default function Index() {
       if (response.success) {
         setResendMessage('Verification email sent! Please check your inbox.');
       } else {
-        setResendMessage('Failed to send verification email. Please try again.');
+        setResendMessage('Couldn’t send the verification email. Try again in a moment.');
       }
     } catch {
-      setResendMessage('Failed to send verification email. Please try again.');
+      setResendMessage('Couldn’t send the verification email. Try again in a moment.');
     } finally {
       setIsResending(false);
     }
@@ -411,11 +447,19 @@ export default function Index() {
                     create, update, or delete anything.
                   </p>
                   <p className="text-xs text-red-800 mt-2">
-                    Please contact support for more details and to get your project re-enabled.
+                    {(activeProject.disabledReason && DISABLED_COPY[activeProject.disabledReason]?.detail) ??
+                      DISABLED_COPY_FALLBACK.detail}
                   </p>
                 </div>
                 <Button asChild size="sm" variant="outline" className="w-full sm:w-auto flex-shrink-0">
-                  <Link href="/settings?tab=security">View Details</Link>
+                  <Link
+                    href={
+                      (activeProject.disabledReason && DISABLED_COPY[activeProject.disabledReason]?.href) ??
+                      DISABLED_COPY_FALLBACK.href
+                    }
+                  >
+                    View details
+                  </Link>
                 </Button>
               </AlertDescription>
             </Alert>
@@ -437,7 +481,7 @@ export default function Index() {
                     onClick={handleResendVerification}
                     disabled={isResending}
                   >
-                    {isResending ? 'Sending...' : 'Resend verification email'}
+                    {isResending ? 'Sending…' : 'Resend verification email'}
                   </Button>
                   {resendMessage && (
                     <p className={`text-xs ${resendMessage.includes('sent') ? 'text-green-600' : 'text-red-500'}`}>
@@ -467,7 +511,7 @@ export default function Index() {
                     Your emails currently include Plunk branding. Upgrade to a subscription to remove it.
                   </span>
                   <Button asChild size="sm" className="w-full sm:w-auto">
-                    <Link href="/settings?tab=billing">Upgrade Now</Link>
+                    <Link href="/settings?tab=billing">Upgrade now</Link>
                   </Button>
                 </AlertDescription>
               </Alert>
@@ -491,8 +535,8 @@ export default function Index() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {stats.map((stat, index) => {
               const Icon = stat.icon;
-              const isEmails = stat.name === 'Emails Sent';
-              const isOpenRate = stat.name === 'Open Rate';
+              const isEmails = stat.name === 'Emails sent';
+              const isOpenRate = stat.name === 'Open rate';
               return (
                 <motion.div
                   key={stat.name}
@@ -647,19 +691,19 @@ export default function Index() {
           {/* API Keys — full-width slim band with the two keys side-by-side */}
           <Card>
             <CardHeader>
-              <CardTitle>API Keys</CardTitle>
+              <CardTitle>API keys</CardTitle>
               <CardDescription>Use these keys to integrate with Plunk</CardDescription>
             </CardHeader>
             <CardContent>
               {activeProject ? (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6">
                   <ApiKeyDisplay
-                    label="Public Key"
+                    label="Public key"
                     value={activeProject.public}
                     description="Use this key for client-side integrations"
                   />
                   <ApiKeyDisplay
-                    label="Secret Key"
+                    label="Secret key"
                     value={activeProject.secret}
                     description="Keep this key secure and never expose it publicly"
                     isSecret

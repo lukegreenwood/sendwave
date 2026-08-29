@@ -14,11 +14,13 @@ import {DASHBOARD_URI, LANDING_URI, STRIPE_ENABLED, STRIPE_WEBHOOK_SECRET} from 
 import {stripe} from '../app/stripe.js';
 import {prisma} from '../database/prisma.js';
 import {BillingLimitService} from '../services/BillingLimitService.js';
+import {CampaignService} from '../services/CampaignService.js';
 import {ContactService} from '../services/ContactService.js';
 import {EventService} from '../services/EventService.js';
 import {MembershipService} from '../services/MembershipService.js';
 import {MeterService} from '../services/MeterService.js';
 import {NtfyService} from '../services/NtfyService.js';
+import {QueueService} from '../services/QueueService.js';
 import {SecurityService} from '../services/SecurityService.js';
 import {CatchAsync} from '../utils/asyncHandler.js';
 
@@ -40,7 +42,10 @@ export class Webhooks {
       // Verify SNS message signature before processing anything
       const signatureValid = await SecurityService.verifySnsSignature(req.body as Record<string, string>);
       if (!signatureValid) {
-        signale.warn('[WEBHOOK] SNS signature verification failed — request rejected');
+        // Error level, not warn: this is indistinguishable from a working install right up
+        // until someone notices that no engagement has been recorded for days. Every event
+        // for every project drops here, and nothing else in the system counts the misses.
+        signale.error('[WEBHOOK] SNS signature verification failed — request rejected. All SES events are being dropped.');
         return res.status(403).json({success: false, message: 'Invalid SNS signature'});
       }
 
@@ -303,7 +308,10 @@ export class Webhooks {
       });
 
       if (!email) {
-        signale.warn(`[WEBHOOK] Email not found for messageId: ${messageId}`);
+        // Error level for the same reason as a signature failure: an event that matches no
+        // email row is silently lost, and SES gives up after its retries. A run of these
+        // means the send path is not stamping `messageId`, which is invisible from outside.
+        signale.error(`[WEBHOOK] ${eventType} event dropped — no email found for messageId: ${messageId}`);
         return res.status(404).json({success: false, error: 'Email not found'});
       }
 
@@ -457,6 +465,15 @@ export class Webhooks {
         data: updateData,
       });
 
+      // The campaign counters the stats endpoint reads live on the campaign row, and this
+      // event has just moved one of them. They are not incremented from here: this handler
+      // runs once per recipient per event, so a write per event would serialize thousands of
+      // updates on a single row -- the same reason `sentCount` is not incremented in the send
+      // path either. Marking the campaign costs one Redis SADD, and the sweep recounts it.
+      if (email.campaignId) {
+        await CampaignService.markStatsDirty(email.campaignId);
+      }
+
       // Track event (this will trigger workflows)
       await EventService.trackEvent(email.projectId, eventName, email.contactId, email.id, eventData);
 
@@ -521,36 +538,41 @@ export class Webhooks {
             break;
           }
 
-          // Update project with customer and subscription IDs
+          // Update project with customer and subscription IDs. PENDING until the off-session
+          // charge returns a verdict; the project is usable in the meantime, which is a few
+          // seconds of exposure against a signal that otherwise takes a month to arrive.
           const updatedProject = await prisma.project.update({
             where: {id: projectId},
             data: {
               customer: customerId,
               subscription: subscriptionId,
+              cardVerification: 'PENDING',
+              cardVerificationAt: new Date(),
+              cardVerificationSession: session.id,
             },
           });
 
-          // Base onboarding credit: refund the 1-unit card-verification charge
-          let creditBalance = -100;
+          await stripe.customers.update(customerId, {name: updatedProject.name});
 
-          // Switching-offer promo: 2 extra units of credit if the customer typed SWITCH
-          // into the Promo code custom field on Stripe Checkout.
           const promoField = session.custom_fields?.find((f) => f.key === 'promo_code');
           const promoCode = promoField?.text?.value?.trim().toUpperCase();
-          if (promoCode === 'SWITCH') {
-            creditBalance -= 200;
-            signale.success(`[WEBHOOK] SWITCH promo applied for project ${projectId}`);
-          } else if (promoCode) {
+          if (promoCode && promoCode !== 'SWITCH') {
             signale.info(`[WEBHOOK] Unknown promo code "${promoCode}" entered for project ${projectId}`);
           }
 
-          // Update Stripe customer name to match project name and add credit for onboarding fee
-          await stripe.customers.update(customerId, {
-            name: updatedProject.name,
-            balance: creditBalance,
+          // Verify the card accepts a merchant-initiated charge before trusting it with a
+          // month of usage. Queued rather than inline: confirming a PaymentIntent can outlast
+          // Stripe's webhook timeout, and a timeout means a redelivery — and a second charge.
+          // Credit for the onboarding fee is applied by the job, once the outcome is known.
+          await QueueService.queueCardVerification({
+            projectId,
+            customerId,
+            currency: session.currency ?? 'eur',
+            sessionId: session.id,
+            ...(promoCode && {promoCode}),
           });
 
-          signale.success(`[WEBHOOK] Checkout completed for project ${projectId}`);
+          signale.success(`[WEBHOOK] Checkout completed for project ${projectId}, card verification queued`);
 
           // Send notification about subscription started
           await NtfyService.notifySubscriptionStarted(updatedProject.name, projectId, subscriptionId);

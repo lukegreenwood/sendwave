@@ -17,11 +17,34 @@ import {Keys} from './keys.js';
  * - Uses indexed fields (createdAt) for sorting
  * - Batch processes and merges results from multiple tables
  */
+/**
+ * The parts of an email needed to describe where a subscription change came
+ * from. The campaign / workflow names come along because they are what a user
+ * actually wants to know: which send lost them a subscriber.
+ */
+interface SubscriptionSourceEmail {
+  id: string;
+  subject: string;
+  campaign: {name: string} | null;
+  workflowExecution: {workflow: {name: string}} | null;
+}
+
 export class ActivityService {
   private static readonly DEFAULT_LIMIT = 50;
   private static readonly MAX_LIMIT = 100;
   private static readonly DEFAULT_DAYS_BACK = 30;
   private static readonly STATS_CACHE_TTL = 300; // 5 minutes
+
+  /**
+   * Reserved event names that represent a contact's subscription changing.
+   * These are written by ContactService, WorkflowExecutionService and
+   * EmailService, and are promoted out of the generic `event.triggered`
+   * bucket so the feed can label them properly and filter on them.
+   */
+  private static readonly SUBSCRIPTION_ACTIVITY_TYPES: Record<string, ActivityType> = {
+    'contact.subscribed': ActivityType.CONTACT_SUBSCRIBED,
+    'contact.unsubscribed': ActivityType.CONTACT_UNSUBSCRIBED,
+  };
 
   /**
    * Get unified activity feed for a project
@@ -66,15 +89,21 @@ export class ActivityService {
     // We fetch limit items from each, then take top limit after sorting
     const fetchLimit = effectiveLimit;
 
-    // Default date range to last 30 days if not specified
+    // Default date range to last 30 days if not specified.
     // IMPORTANT: When cursor is provided (pagination), we should NOT apply the gte constraint
-    // to allow users to paginate back beyond the initial date range
+    // to allow users to paginate back beyond the initial date range.
+    //
+    // Contact-scoped feeds are exempt from the default 30-day floor: a single contact's
+    // history is naturally bounded (not the project-wide firehose the floor guards against),
+    // and older contacts whose newest event predates 30 days would otherwise show an empty
+    // first page with no "Load More" button to reach their history.
     const now = new Date();
     const defaultStartDate = new Date(now.getTime() - this.DEFAULT_DAYS_BACK * 24 * 60 * 60 * 1000);
+    const initialStartDate = startDate ?? (contactId ? undefined : defaultStartDate);
     const dateFilter: Prisma.DateTimeFilter = {
       // Only apply start date filter on initial load (no cursor)
       // This allows pagination to go back indefinitely
-      ...(cursor ? {} : {gte: startDate || defaultStartDate}),
+      ...(cursor || !initialStartDate ? {} : {gte: initialStartDate}),
       ...(endDate ? {lte: endDate} : {}),
     };
 
@@ -331,13 +360,32 @@ export class ActivityService {
     contactId?: string,
     types?: ActivityType[],
   ): Promise<Activity[]> {
-    // Skip if filtering by types and event.triggered is not included
-    if (types && !types.includes(ActivityType.EVENT_TRIGGERED)) {
+    // Subscription changes are stored as events with reserved names, but are
+    // surfaced as their own activity types rather than generic triggered events.
+    const requestedSubscriptionNames = Object.entries(this.SUBSCRIPTION_ACTIVITY_TYPES)
+      .filter(([, activityType]) => !types || types.includes(activityType))
+      .map(([eventName]) => eventName);
+    const includeTriggered = !types || types.includes(ActivityType.EVENT_TRIGGERED);
+
+    // Skip if neither generic events nor any subscription type was requested
+    if (!includeTriggered && requestedSubscriptionNames.length === 0) {
       return [];
     }
 
+    // Translate the requested types into a name filter. Both branches hit the
+    // (projectId, name, createdAt) index when a name predicate is present.
+    const excludedSubscriptionNames = Object.keys(this.SUBSCRIPTION_ACTIVITY_TYPES).filter(
+      name => !requestedSubscriptionNames.includes(name),
+    );
+    const nameFilter: Prisma.StringFilter | undefined = includeTriggered
+      ? excludedSubscriptionNames.length > 0
+        ? {notIn: excludedSubscriptionNames}
+        : undefined
+      : {in: requestedSubscriptionNames};
+
     const where: Prisma.EventWhereInput = {
       projectId,
+      ...(nameFilter ? {name: nameFilter} : {}),
       createdAt: cursorTimestamp
         ? {
             ...dateFilter,
@@ -360,17 +408,66 @@ export class ActivityService {
       },
     });
 
-    return events.map(event => ({
-      id: event.id,
-      type: ActivityType.EVENT_TRIGGERED,
-      timestamp: event.createdAt,
-      contactEmail: event.contact?.email,
-      contactId: event.contactId || undefined,
-      metadata: {
-        eventName: event.name,
-        eventData: event.data,
+    const sourceEmails = await this.fetchSubscriptionSourceEmails(events);
+
+    return events.map(event => {
+      const type = this.SUBSCRIPTION_ACTIVITY_TYPES[event.name] ?? ActivityType.EVENT_TRIGGERED;
+      const sourceEmail = event.emailId ? sourceEmails.get(event.emailId) : undefined;
+
+      return {
+        id: event.id,
+        type,
+        timestamp: event.createdAt,
+        contactEmail: event.contact?.email,
+        contactId: event.contactId || undefined,
+        metadata: {
+          eventName: event.name,
+          eventData: event.data,
+          ...(sourceEmail
+            ? {
+                sourceEmailId: event.emailId,
+                sourceSubject: sourceEmail.subject,
+                campaignName: sourceEmail.campaign?.name,
+                workflowName: sourceEmail.workflowExecution?.workflow?.name,
+              }
+            : {}),
+        },
+      };
+    });
+  }
+
+  /**
+   * Look up the emails that subscription events point at, so the feed can say
+   * which message a contact opted out from.
+   *
+   * Deliberately a second query rather than an `include` on the event fetch: only
+   * subscription events carry an `emailId` worth resolving, and joining the
+   * emails table on every page of a feed that is mostly custom events would pay
+   * for a relation nothing reads. Runs at most once per page, over at most
+   * `limit` ids, and is skipped entirely when no event on the page has a source.
+   */
+  private static async fetchSubscriptionSourceEmails(
+    events: {name: string; emailId: string | null}[],
+  ): Promise<Map<string, SubscriptionSourceEmail>> {
+    const emailIds = events
+      .filter(event => event.emailId && this.SUBSCRIPTION_ACTIVITY_TYPES[event.name])
+      .map(event => event.emailId as string);
+
+    if (emailIds.length === 0) {
+      return new Map();
+    }
+
+    const emails = await prisma.email.findMany({
+      where: {id: {in: [...new Set(emailIds)]}},
+      select: {
+        id: true,
+        subject: true,
+        campaign: {select: {name: true}},
+        workflowExecution: {select: {workflow: {select: {name: true}}}},
       },
-    }));
+    });
+
+    return new Map(emails.map(email => [email.id, email]));
   }
 
   /**

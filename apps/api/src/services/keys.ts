@@ -19,6 +19,12 @@ export const Keys = {
       return `auth:password_reset_rate:${email}`;
     },
   },
+  RateLimit: {
+    /** Per-project token bucket for an API endpoint group. See middleware/rateLimit.ts. */
+    bucket(name: string, projectId: string): string {
+      return `ratelimit:${name}:${projectId}`;
+    },
+  },
   Domain: {
     id(id: string): string {
       return `domain:id:${id}`;
@@ -85,6 +91,32 @@ export const Keys = {
     },
     owner(projectId: string): string {
       return `membership:owner:${projectId}`;
+    },
+  },
+  Campaign: {
+    /**
+     * Emails sent so far in an in-flight campaign.
+     *
+     * Held in Redis rather than incremented on the campaign row: the send path runs
+     * once per recipient at a concurrency derived from the SES quota, and every one
+     * of those writes would contend for the same row and leave a dead tuple behind.
+     * `Campaign.sentCount` is written once, when the send finalizes.
+     */
+    sentProgress(campaignId: string): string {
+      return `campaign:sent_progress:${campaignId}`;
+    },
+
+    /**
+     * Set of campaigns whose materialized counters are behind their email rows.
+     *
+     * One set for the whole install rather than a key per campaign: the sweep needs to
+     * find the campaigns that changed without scanning the keyspace, and SADD of an id
+     * that is already a member is free. Membership is the only state -- what changed and
+     * how much is re-derived by counting the emails, so a duplicate add costs nothing and
+     * a lost one is corrected by the next event on that campaign.
+     */
+    statsDirty(): string {
+      return 'campaign:stats_dirty';
     },
   },
   Project: {

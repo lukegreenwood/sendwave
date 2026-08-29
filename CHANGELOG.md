@@ -1,5 +1,77 @@
 # Changelog
 
+## [0.14.0](https://github.com/useplunk/plunk/compare/v0.13.0...v0.14.0) (2026-08-17)
+
+
+### Features
+
+* Add additional card verification in worker ([33cc815](https://github.com/useplunk/plunk/commit/33cc81547c2d2d936f2977680239429ef025c6eb))
+* Add additional tools to MCP for contacts and campaigns ([24b48cb](https://github.com/useplunk/plunk/commit/24b48cbfbde3cc15b784a3aca1701194305dd9f0))
+* Add event context to send email step ([4fa6379](https://github.com/useplunk/plunk/commit/4fa63795a07afea5740bccf7d55c2976d4e0e1b8))
+* Add foundations for Plunk MCP Server ([5828309](https://github.com/useplunk/plunk/commit/5828309ce41794bf39d35df49639c5cfe8e3b7fc))
+* Add foundations for Plunk MCP Server ([00b0a92](https://github.com/useplunk/plunk/commit/00b0a92bf9dd883f05bd5d44e5fde026e1a35ca2))
+* Add foundations for Plunk MCP Server ([7167a0a](https://github.com/useplunk/plunk/commit/7167a0a2bba5992f230292240ef9d582511ec775))
+* Add optional rate limiting for track, send and contact endpoints ([05080e7](https://github.com/useplunk/plunk/commit/05080e71714edaa5d13875e313504c748315d39f))
+* **web:** highlight Liquid logic tags in the visual editor ([556167d](https://github.com/useplunk/plunk/commit/556167da9085f053fc703abf42be626df0381042))
+* **web:** insert logic blocks across lines when starting a fresh line ([bfa3ee9](https://github.com/useplunk/plunk/commit/bfa3ee94c4783e8398e753d5ad3c2a834b46a932))
+* **web:** offer case, contains, for/else, comment and raw blocks ([54c8f30](https://github.com/useplunk/plunk/commit/54c8f302fe898a1176c937296d3eff586429aa09))
+* **web:** offer ready-made Liquid blocks, and rebuild both suggestion menus ([7c3b2ca](https://github.com/useplunk/plunk/commit/7c3b2ca8fa267261d1950fc18bf6af5edea225ef))
+* **web:** report template syntax errors while editing ([c48401b](https://github.com/useplunk/plunk/commit/c48401bd79ea3558f3772dbcd58fac27caf59b02))
+* **web:** warn about field references that will never resolve ([066470c](https://github.com/useplunk/plunk/commit/066470c77bcc1a1139d3e5a8ad764b682ad6ae16))
+
+
+### Bug Fixes
+
+* improve performance tests to work on CI and fix test config ([a3de94d](https://github.com/useplunk/plunk/commit/a3de94d78954129ced8b673fb327712caba318c2))
+* **smtp:** preserve Reply-To when relaying to /v1/send ([ce3bcf0](https://github.com/useplunk/plunk/commit/ce3bcf05afb97ab37be944b9b6037d5c60ef8d31))
+* **smtp:** preserve Reply-To when relaying to /v1/send ([73d0d5a](https://github.com/useplunk/plunk/commit/73d0d5a6726539e65edbcdb5d5956be6a850d839))
+* **templates:** stop rejecting inline bodies on /v1/send ([474034d](https://github.com/useplunk/plunk/commit/474034df9b521a600ca25147b616dcccbba48624))
+* **web:** don't warn about the workflow event payload ([1fac3a8](https://github.com/useplunk/plunk/commit/1fac3a883d9b7ec2ca3bc1c9021759333177f08a))
+
+
+### Performance Improvements
+
+* **templates:** stop re-rendering a template that blew a runtime limit ([e78abb7](https://github.com/useplunk/plunk/commit/e78abb70ce07a9807dc19a420b4fbf9980aed375))
+
+
+### Code Refactoring
+
+* Remove md documents ([df936f3](https://github.com/useplunk/plunk/commit/df936f342dce295e0ffd31bdc5e76f7740186527))
+* **web:** rewrite UX copy for clarity and consistency ([15ecf58](https://github.com/useplunk/plunk/commit/15ecf583c5fa747fbd2e13845f1caf588a879feb))
+* **web:** rewrite UX copy for clarity and consistency ([a62001e](https://github.com/useplunk/plunk/commit/a62001e23c78bf512526d35b495e71f51686ffd7))
+
+## [0.13.0](https://github.com/useplunk/plunk/compare/v0.12.0...v0.13.0) (2026-08-09)
+
+
+### Features
+
+* add email body cleanup job to remove old email content after 90 days ([cef8ce0](https://github.com/useplunk/plunk/commit/cef8ce0b419ae29d3527c8038318bf4be9f62f5d))
+* **api:** insert steps mid-transition and validate connections ([6343ef5](https://github.com/useplunk/plunk/commit/6343ef50a9abbeb2e350b611b9c746ba4d5e5c65))
+* classify emails and build headers based on email type ([8f23d8a](https://github.com/useplunk/plunk/commit/8f23d8aac479ae4e7d9926965f090c75afd3f6d5)), closes [#411](https://github.com/useplunk/plunk/issues/411)
+* hide signup link from login when DISABLE_SIGNUPS is set ([21ea0b8](https://github.com/useplunk/plunk/commit/21ea0b80d63b8897bb74323820e6dacae5ab1feb))
+* **i18n:** add Swedish (sv) translations ([1fbaccc](https://github.com/useplunk/plunk/commit/1fbaccccb06f5d94e4e6a65b84f4c03178d10356))
+* **i18n:** add Swedish (sv) translations ([bdd5ab7](https://github.com/useplunk/plunk/commit/bdd5ab777befececce5350dfb3755046296beb11))
+* implement idempotency for POST /v1/track and POST /v1/send with cleanup job ([94c85ac](https://github.com/useplunk/plunk/commit/94c85acf2441049b866a520d7e083e1b65aa4944))
+* insert, disconnect and reconnect steps in the workflow editor ([aa4b011](https://github.com/useplunk/plunk/commit/aa4b011678418e28987ec360db1c196c89a1f759))
+* One post click unsubscribe links for Plunk hosted emails ([64b51df](https://github.com/useplunk/plunk/commit/64b51df8301182aa44b47855b1eb15a06cd3ffaa))
+* **web:** insert, disconnect and reconnect steps in the workflow editor ([68cd243](https://github.com/useplunk/plunk/commit/68cd2439bd3151eadc85d35a88b1ad582374208c))
+* **web:** scope email editor 'Preview as' to the campaign's segment ([abef349](https://github.com/useplunk/plunk/commit/abef34949d8d3106f67211d446e97bb91b2fac5c))
+* **web:** scope email editor 'Preview as' to the campaign's segment ([184f019](https://github.com/useplunk/plunk/commit/184f0197238fac37baa4a2536d7cc5519a472bad))
+
+
+### Bug Fixes
+
+* **api:** close SSRF bypass via IPv6 transition addresses in webhooks ([a60ce6b](https://github.com/useplunk/plunk/commit/a60ce6b87c3b88b23365b6cb2367ca4afcb6f772))
+* **api:** close SSRF bypass via IPv6 transition addresses in webhooks ([e71c747](https://github.com/useplunk/plunk/commit/e71c747a84f0858a2861aef9d3034d5bb5f54d87))
+* **events:** reject cross-tenant contact and email IDs on event tracking ([7aad5de](https://github.com/useplunk/plunk/commit/7aad5deb3d03895a0a0c7877edc91aaebb389f8f))
+* **events:** reject cross-tenant contact and email IDs on event tracking ([6ff7ad0](https://github.com/useplunk/plunk/commit/6ff7ad07b8e6b55e4cc5421fb3d351826aef4f0f))
+* refine date filtering logic for activity feeds and pagination ([3b86873](https://github.com/useplunk/plunk/commit/3b868734dafad4453c10667d65b34853aaaf1bba))
+
+
+### Documentation
+
+* Update OpenAPI spec to reflect implementation ([ff609f8](https://github.com/useplunk/plunk/commit/ff609f8de1f6c08720a977116ac9b75f759e7dc9))
+
 ## [0.12.0](https://github.com/useplunk/plunk/compare/v0.11.0...v0.12.0) (2026-06-21)
 
 

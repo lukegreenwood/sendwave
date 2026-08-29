@@ -13,6 +13,8 @@ import {
   MousePointerClick,
   Send,
   ShieldAlert,
+  UserMinus,
+  UserPlus,
   Workflow,
   XCircle,
   Zap,
@@ -121,9 +123,72 @@ interface ActivityConfig {
   description?: string;
   badge?: {
     label: string;
-    variant: 'default' | 'secondary' | 'destructive' | 'outline';
+    variant: 'default' | 'secondary' | 'neutral' | 'destructive' | 'outline';
   };
   jsonData?: Record<string, unknown>;
+}
+
+/**
+ * Read an event's payload, which Prisma types as JsonValue
+ */
+function getEventData(metadata: Record<string, unknown>): Record<string, unknown> | undefined {
+  const {eventData} = metadata;
+  return eventData && typeof eventData === 'object' && !Array.isArray(eventData)
+    ? (eventData as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * Human-readable cause of a subscription change, when the event recorded one.
+ * Only the bounce and complaint paths write a reason today, so anything else
+ * stays undefined rather than guessing at a source.
+ */
+function getSubscriptionReason(metadata: Record<string, unknown>): string | undefined {
+  const reason = getEventData(metadata)?.reason;
+
+  switch (reason) {
+    case 'bounce':
+      return 'Removed after a hard bounce';
+    case 'complaint':
+      return 'Removed after a spam complaint';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Subject of the email a subscription change came from, which becomes the row's
+ * title — the same slot an email row uses for its subject.
+ *
+ * Absent for changes with no email behind them (a dashboard toggle, a CSV
+ * import, an API call) and for mail sent before unsubscribe links carried their
+ * source; those rows title themselves by the action instead.
+ */
+function getSubscriptionSubject(metadata: Record<string, unknown>): string | undefined {
+  return typeof metadata.sourceSubject === 'string' && metadata.sourceSubject ? metadata.sourceSubject : undefined;
+}
+
+/**
+ * Which send the originating email belonged to, in the same `Campaign: x` /
+ * `Workflow: x` form email rows use. Transactional sources have neither, and
+ * name themselves through the subject in the title.
+ */
+function getSubscriptionOrigin(metadata: Record<string, unknown>): string | undefined {
+  if (typeof metadata.campaignName === 'string' && metadata.campaignName) {
+    return `Campaign: ${metadata.campaignName}`;
+  }
+  if (typeof metadata.workflowName === 'string' && metadata.workflowName) {
+    return `Workflow: ${metadata.workflowName}`;
+  }
+  return undefined;
+}
+
+/**
+ * Describe a subscription change as cause and origin — either, both, or neither.
+ */
+function getSubscriptionDescription(metadata: Record<string, unknown>): string | undefined {
+  const parts = [getSubscriptionReason(metadata), getSubscriptionOrigin(metadata)].filter(Boolean);
+  return parts.length > 0 ? parts.join(' • ') : undefined;
 }
 
 function getActivityConfig(activity: Activity): ActivityConfig {
@@ -141,10 +206,7 @@ function getActivityConfig(activity: Activity): ActivityConfig {
           label: 'Event',
           variant: 'default',
         },
-        jsonData:
-          metadata.eventData && typeof metadata.eventData === 'object' && !Array.isArray(metadata.eventData)
-            ? (metadata.eventData as Record<string, unknown>)
-            : undefined,
+        jsonData: getEventData(metadata),
       };
 
     case 'email.sent':
@@ -294,6 +356,36 @@ function getActivityConfig(activity: Activity): ActivityConfig {
         },
       };
 
+    case 'contact.subscribed':
+      return {
+        icon: UserPlus,
+        color: 'text-emerald-700',
+        bgColor: 'bg-emerald-50',
+        title: getSubscriptionSubject(metadata) || 'Contact subscribed',
+        description: getSubscriptionDescription(metadata),
+        badge: {
+          label: 'Subscribed',
+          variant: 'default',
+        },
+        jsonData: getEventData(metadata),
+      };
+
+    case 'contact.unsubscribed':
+      return {
+        icon: UserMinus,
+        color: 'text-neutral-700',
+        bgColor: 'bg-neutral-100',
+        title: getSubscriptionSubject(metadata) || 'Contact unsubscribed',
+        description: getSubscriptionDescription(metadata),
+        badge: {
+          label: 'Unsubscribed',
+          // `outline` is this feed's marker for scheduled, not-yet-happened
+          // items; a past opt-out takes the muted fill instead.
+          variant: 'neutral',
+        },
+        jsonData: getEventData(metadata),
+      };
+
     case 'campaign.scheduled':
       return {
         icon: Calendar,
@@ -400,7 +492,7 @@ export const ActivityItem = memo(function ActivityItem({activity, status = 'comp
               <Collapsible className="mt-2">
                 <CollapsibleTrigger className="flex items-center gap-1 text-xs text-neutral-600 hover:text-neutral-900 transition-colors group">
                   <ChevronRight className="h-3 w-3 transition-transform group-data-[state=open]:rotate-90" />
-                  <span className="font-medium">Event Data</span>
+                  <span className="font-medium">Event data</span>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <pre className="mt-2 p-3 bg-neutral-50 rounded-md border border-neutral-200 text-xs overflow-x-auto">
