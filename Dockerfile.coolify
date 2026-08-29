@@ -42,6 +42,7 @@ COPY package.json yarn.lock ./
 
 # Copy workspace package.json files
 COPY apps/api/package.json ./apps/api/
+COPY apps/mcp/package.json ./apps/mcp/
 COPY apps/smtp/package.json ./apps/smtp/
 COPY apps/web/package.json ./apps/web/
 COPY apps/landing/package.json ./apps/landing/
