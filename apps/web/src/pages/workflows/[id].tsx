@@ -24,14 +24,21 @@ import {
   CommandItem,
   CommandList,
   IconSpinner,
-  Switch,
 } from '@plunk/ui';
 import type {Workflow, WorkflowExecution, WorkflowStep, WorkflowTransition} from '@plunk/db';
 import {DashboardLayout} from '../../components/DashboardLayout';
+import {
+  entryRuleError,
+  entryRuleOf,
+  entryRulePayload,
+  type EntryRulePayload,
+  WorkflowEntryRules,
+} from '../../components/WorkflowEntryRules';
 import {network} from '../../lib/network';
 import {
   AlertTriangle,
   ArrowLeft,
+  CircleStop,
   Info,
   Power,
   PowerOff,
@@ -314,9 +321,8 @@ export default function WorkflowEditorPage() {
   const handleUpdateSettings = async (data: {
     name: string;
     description?: string;
-    allowReentry?: boolean;
     triggerConfig?: {eventName: string};
-  }) => {
+  } & EntryRulePayload) => {
     try {
       await network.fetch<Workflow, typeof WorkflowSchemas.update>('PATCH', `/workflows/${id}`, data);
       toast.success('Workflow updated');
@@ -671,21 +677,16 @@ export default function WorkflowEditorPage() {
               }
             }}
             title="Cancel this execution?"
+            icon={CircleStop}
             description={
               dialog.type === 'cancelOne' && executionsData?.executions ? (
-                <div className="space-y-2">
-                  <p>
-                    Stops this workflow for{' '}
-                    <strong>
-                      {executionsData.executions.find(e => e.id === dialog.executionId)?.contact.email ||
-                        'this contact'}
-                    </strong>
-                    .
-                  </p>
-                  <p className="text-sm text-neutral-600">
-                    They won&apos;t receive any remaining emails or actions from it. This can&apos;t be undone.
-                  </p>
-                </div>
+                <>
+                  Stops this workflow for{' '}
+                  <strong>
+                    {executionsData.executions.find(e => e.id === dialog.executionId)?.contact.email || 'this contact'}
+                  </strong>
+                  . They won&apos;t receive any remaining emails or actions from it. This can&apos;t be undone.
+                </>
               ) : (
                 "The contact won't receive any remaining emails or actions from this workflow. This can't be undone."
               )
@@ -702,16 +703,13 @@ export default function WorkflowEditorPage() {
             onOpenChange={open => !open && setDialog({type: 'none'})}
             onConfirm={handleCancelAllExecutions}
             title="Cancel every active execution?"
+            icon={CircleStop}
             description={
-              <div className="space-y-2">
-                <p>
-                  Stops this workflow for all <strong>{activeExecutionsCount}</strong> contact
-                  {activeExecutionsCount !== 1 ? 's' : ''} currently in it.
-                </p>
-                <p className="text-sm text-neutral-600">
-                  They won&apos;t receive any remaining emails or actions. This can&apos;t be undone.
-                </p>
-              </div>
+              <>
+                Stops this workflow for all <strong>{activeExecutionsCount}</strong> contact
+                {activeExecutionsCount !== 1 ? 's' : ''} currently in it. They won&apos;t receive any remaining emails
+                or actions. This can&apos;t be undone.
+              </>
             }
             confirmText={`Cancel ${activeExecutionsCount} execution${activeExecutionsCount !== 1 ? 's' : ''}`}
             cancelText="Keep running"
@@ -743,16 +741,15 @@ interface SettingsDialogProps {
   onSave: (data: {
     name: string;
     description?: string;
-    allowReentry?: boolean;
     triggerConfig?: {eventName: string};
-  }) => Promise<void>;
+  } & EntryRulePayload) => Promise<void>;
 }
 
 function SettingsDialog({workflow, open, onOpenChange, onSave}: SettingsDialogProps) {
   const triggerConfig = workflow.triggerConfig as {eventName?: string} | null;
   const [name, setName] = useState(workflow.name);
   const [description, setDescription] = useState(workflow.description ?? '');
-  const [allowReentry, setAllowReentry] = useState(workflow.allowReentry ?? false);
+  const [entryRule, setEntryRule] = useState(() => entryRuleOf(workflow));
   const [eventName, setEventName] = useState(triggerConfig?.eventName ?? '');
   const [eventPopoverOpen, setEventPopoverOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -762,7 +759,7 @@ function SettingsDialog({workflow, open, onOpenChange, onSave}: SettingsDialogPr
     if (open) {
       setName(workflow.name);
       setDescription(workflow.description ?? '');
-      setAllowReentry(workflow.allowReentry ?? false);
+      setEntryRule(entryRuleOf(workflow));
       const config = workflow.triggerConfig as {eventName?: string} | null;
       setEventName(config?.eventName ?? '');
     }
@@ -781,7 +778,7 @@ function SettingsDialog({workflow, open, onOpenChange, onSave}: SettingsDialogPr
       await onSave({
         name,
         description: description || undefined,
-        allowReentry,
+        ...entryRulePayload(entryRule),
         triggerConfig: eventName.trim() ? {eventName: eventName.trim()} : undefined,
       });
     } finally {
@@ -831,7 +828,7 @@ function SettingsDialog({workflow, open, onOpenChange, onSave}: SettingsDialogPr
                 onBlur={() => {
                   setTimeout(() => setEventPopoverOpen(false), 150);
                 }}
-                placeholder="e.g., contact.created, email.opened"
+                placeholder="e.g., user.signup, email.open"
                 required
                 autoComplete="off"
               />
@@ -867,24 +864,13 @@ function SettingsDialog({workflow, open, onOpenChange, onSave}: SettingsDialogPr
             </p>
           </div>
 
-          <div className="flex items-start gap-3 p-4 bg-neutral-50 rounded-lg border border-neutral-200">
-            <Switch id="allowReentry" checked={allowReentry} onCheckedChange={setAllowReentry} />
-            <div className="flex-1">
-              <Label htmlFor="allowReentry" className="font-medium cursor-pointer">
-                Allow re-entry
-              </Label>
-              <p className="text-xs text-neutral-500 mt-1">
-                When enabled, contacts can enter this workflow multiple times. When disabled, contacts can only enter
-                once, ever.
-              </p>
-            </div>
-          </div>
+          <WorkflowEntryRules value={entryRule} onChange={setEntryRule} eventName={eventName} />
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
+            <Button type="submit" disabled={isSubmitting || entryRuleError(entryRule) !== null}>
               {isSubmitting ? 'Saving…' : 'Save Changes'}
             </Button>
           </DialogFooter>

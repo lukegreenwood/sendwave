@@ -18,6 +18,9 @@ export const Keys = {
     passwordResetRateLimit(email: string): string {
       return `auth:password_reset_rate:${email}`;
     },
+    passwordChangeRateLimit(userId: string): string {
+      return `auth:password_change_rate:${userId}`;
+    },
   },
   RateLimit: {
     /** Per-project token bucket for an API endpoint group. See middleware/rateLimit.ts. */
@@ -64,14 +67,8 @@ export const Keys = {
     },
   },
   Analytics: {
-    timeseries(projectId: string, startDate: string, endDate: string): string {
-      return `analytics:timeseries:${projectId}:${startDate}:${endDate}`;
-    },
-    campaignStats(projectId: string, startDate: string, endDate: string): string {
-      return `analytics:campaignStats:${projectId}:${startDate}:${endDate}`;
-    },
-    topEvents(projectId: string, limit: number, startDate: string, endDate: string): string {
-      return `analytics:topEvents:${projectId}:${limit}:${startDate}:${endDate}`;
+    query(projectId: string, kind: string, params: string): string {
+      return `analytics:${kind}:${projectId}:${params}`;
     },
   },
   Workflow: {
@@ -117,6 +114,21 @@ export const Keys = {
      */
     statsDirty(): string {
       return 'campaign:stats_dirty';
+    },
+  },
+  Contact: {
+    /**
+     * Sorted set of the `Contact.data` keys a project uses, scored by when each was first
+     * seen. Contact writes add to it, so a new field is offered immediately; the background
+     * scan prunes keys no contact carries any more. See ContactFieldService.
+     */
+    fieldKeys(projectId: string): string {
+      return `contact:field_keys:${projectId}`;
+    },
+
+    /** Coverage and type per data key, as measured by the last background scan. */
+    fieldStats(projectId: string): string {
+      return `contact:field_stats:${projectId}`;
     },
   },
   Project: {

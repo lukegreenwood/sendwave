@@ -256,7 +256,9 @@ export function lintTemplateFields(source: string, fields: ContactField[]): Temp
   }
 
   const {referenced, bound} = collectReferences(source);
-  const byName = new Map(fields.map(field => [field.field, field]));
+  // The endpoint names custom fields by their path (`data.plan`), while references are
+  // reduced to their root (`plan`) by `rootOf`. Key by the same root so the two meet.
+  const byName = new Map(fields.map(field => [rootOf(field.field) ?? field.field, field]));
   const known = [...RUNTIME_NAMES, ...byName.keys()];
   const knownSet = new Set(known);
 
@@ -282,7 +284,7 @@ export function lintTemplateFields(source: string, fields: ContactField[]): Temp
     }
 
     const field = byName.get(name);
-    if (field && field.coverage < SPARSE_COVERAGE_THRESHOLD) {
+    if (field && field.coverage !== null && field.coverage < SPARSE_COVERAGE_THRESHOLD) {
       warnings.push({
         kind: 'sparse',
         field: name,

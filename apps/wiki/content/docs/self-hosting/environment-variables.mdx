@@ -54,6 +54,15 @@ The bundled Docker setup includes Minio with defaults that work out of the box. 
 | `S3_BUCKET`            | No       | Bucket name for file uploads.                                      | `uploads`           |
 | `S3_PUBLIC_URL`        | No       | Publicly accessible base URL for stored files.                     | —                   |
 | `S3_FORCE_PATH_STYLE`  | No       | Use path-style URLs instead of virtual-hosted. Required for Minio. | `true`              |
+| `S3_PREFIX`            | No       | Upload folder in the bucket; only it is made publicly readable.    | —                   |
+
+<Callout type="warn">
+  Setting `S3_PREFIX` on an instance that already has uploads breaks every image uploaded before it. The bucket
+  policy is replaced to only make objects under the prefix publicly readable, so files at the bucket root (already
+  embedded in templates, campaigns and sent emails) start returning 403. Moving them under the prefix doesn't help,
+  since that changes their URLs. Only set it on a new install. `S3_PUBLIC_URL` must still point at the bucket root,
+  since the prefix is appended to it.
+</Callout>
 
 ## Attachments
 
@@ -123,11 +132,14 @@ Required if you want to enable billing features. All Stripe variables must be se
 | -------------------------- | -------- | --------------------------------------------------- | ------------------ |
 | `STRIPE_SK`                | No       | Stripe secret key.                                  |
 | `STRIPE_WEBHOOK_SECRET`    | No       | Stripe webhook signing secret for verifying events. |
-| `STRIPE_PRICE_ONBOARDING`  | No       | Stripe price ID for the one-time onboarding fee.    |
 | `STRIPE_PRICE_EMAIL_USAGE` | No       | Stripe price ID for metered pay-per-email usage.    |
 | `STRIPE_METER_EVENT_NAME`  | No       | Stripe meter event name.                            | `emails` (default) |
 
-On top of the onboarding fee, activating a subscription places a second charge of 1.00 (in the customer's billing currency) to confirm the card accepts off-session, merchant-initiated payments. This charge is created directly rather than from a price ID, so there's no variable for it. Both charges are credited back to the customer's Stripe balance once verification succeeds. See [Billing](/concepts/billing) for the customer-facing description.
+Checkout collects nothing upfront. Right after it completes, Plunk places a single charge of 2.00 (in the customer's billing currency) to confirm the card accepts off-session, merchant-initiated payments. This charge is created directly rather than from a price ID, so there's no variable for it. It's credited back to the customer's Stripe balance once verification succeeds. The same check runs whenever the customer changes their default card, which requires the `customer.updated` and `customer.subscription.updated` events on your Stripe webhook endpoint. See [Billing](/concepts/billing) for the customer-facing description.
+
+<Callout type="info">
+  `STRIPE_PRICE_ONBOARDING` has been removed. The separate one-time onboarding fee no longer exists, so you can delete the variable from your environment; it's ignored if still set.
+</Callout>
 
 <Callout type="warn">
   If you use a Stripe Radar rule to request 3D Secure, exclude off-session payments from it
@@ -159,6 +171,12 @@ Plunk bundles a self-hosted [ntfy](https://ntfy.sh) server for internal system n
 | ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `DISABLE_SIGNUPS`        | No       | When `true`, the signup endpoint rejects new registrations. Useful for private instances.                                   | `false` |
 | `VERIFY_EMAIL_ON_SIGNUP` | No       | When `true`, validates emails on signup — checks for disposable domains, plus-addressing, domain existence, and MX records. | `false` |
+
+## Interface
+
+| Variable       | Required | Description                                                                                                                                                      | Default |
+| -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `SHOW_SPONSOR` | No       | When `true`, the dashboard navigation shows a **Sponsor** link to [GitHub Sponsors](https://github.com/sponsors/driaug). Set to `false` to hide it.               | `true`  |
 
 ## Security
 

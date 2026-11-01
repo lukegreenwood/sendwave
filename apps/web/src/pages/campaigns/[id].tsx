@@ -31,8 +31,11 @@ import {
   StickySaveBar,
 } from '@plunk/ui';
 import type {Campaign, Segment} from '@plunk/db';
+import type {CampaignRecipientType} from '@plunk/types';
 import {CampaignAudienceType, CampaignStatus, TemplateType} from '@plunk/db';
 import {CampaignSchemas, detectUnsubscribeSignal} from '@plunk/shared';
+import {AnimatedNumber} from '../../components/AnimatedNumber';
+import {CampaignRecipientsSheet} from '../../components/CampaignRecipientsSheet';
 import {DashboardLayout} from '../../components/DashboardLayout';
 import {EmailSettings} from '../../components/EmailSettings';
 import {EmailEditor} from '../../components/EmailEditor';
@@ -41,9 +44,12 @@ import {formatFullDateTime, formatUTCDateTime, getUserTimezone, schedulePresets}
 import {useChangeTracking} from '../../lib/hooks/useChangeTracking';
 import {
   AlertCircle,
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   Calendar,
   ChevronDown,
+  CircleStop,
   Info,
   Save,
   Send,
@@ -79,39 +85,109 @@ interface CampaignStats {
   unsubscribeRate: number;
 }
 
+interface SupportingFigure {
+  label: string;
+  count: (s: CampaignStats) => number;
+  rate: (s: CampaignStats) => number;
+  /**
+   * Set where the contacts behind the figure are reachable by index, which makes the
+   * figure a button that opens them. Bounces, complaints and opt-outs are each stamped
+   * on the email row, so all three can be opened.
+   */
+  drillDown?: CampaignRecipientType;
+  /**
+   * Set on the figures where a number is bad news. They read grey at zero -- a healthy
+   * campaign should not draw the eye to three empty columns -- and turn red once they
+   * pass the rate SES enforcement acts on, but only after enough of them to mean
+   * something. `warnRate` and `minCount` mirror the 7-day warning levels in
+   * SecurityService's SECURITY_THRESHOLDS, so this panel and the deliverability
+   * warnings elsewhere in the app never disagree about what "too high" is.
+   */
+  adverse?: {warnRate: number; minCount: number};
+}
+
 /**
- * Reach figures supporting the headline, in funnel order. Opens are excluded because they
- * are the headline; "sent" is excluded because it is always 100% of itself and already
- * stated in the card description, so a row for it can never tell the reader anything.
+ * The five figures supporting the headline, in funnel order. Opens are excluded because
+ * they are the headline, and "sent" because it is always 100% of itself and already
+ * stated in the card description.
  *
  * Every rate is measured against sentCount, the denominator the stats endpoint documents.
  */
-const REACH_FIGURES: {label: string; count: (s: CampaignStats) => number; rate: (s: CampaignStats) => number}[] = [
-  {label: 'delivered', count: s => s.deliveredCount, rate: s => s.deliveryRate},
-  {label: 'clicked', count: s => s.clickedCount, rate: s => s.clickRate},
+const SUPPORTING_FIGURES: SupportingFigure[] = [
+  {label: 'Delivered', count: s => s.deliveredCount, rate: s => s.deliveryRate},
+  {label: 'Clicked', count: s => s.clickedCount, rate: s => s.clickRate},
+  {
+    label: 'Bounced',
+    count: s => s.bouncedCount,
+    rate: s => s.bounceRate,
+    adverse: {warnRate: 5, minCount: 5},
+    drillDown: 'bounced',
+  },
+  {
+    label: 'Spam reports',
+    count: s => s.complainedCount,
+    rate: s => s.complaintRate,
+    adverse: {warnRate: 0.075, minCount: 3},
+    drillDown: 'complained',
+  },
+  // No enforcement threshold applies to unsubscribes, so this one never turns red: it is
+  // a cost to read, not a fault to fix.
+  {
+    label: 'Unsubscribed',
+    count: s => s.unsubscribedCount,
+    rate: s => s.unsubscribeRate,
+    drillDown: 'unsubscribed',
+  },
 ];
 
-/**
- * The three ways this campaign cost a contact. Each suppresses the contact from future
- * marketing, and no recipient appears in more than one -- a bounce or complaint is never
- * also counted as an unsubscribe -- so the three add up.
- */
-const LOST_REASONS: {label: string; count: (s: CampaignStats) => number}[] = [
-  {label: 'bounced', count: s => s.bouncedCount},
-  {label: 'marked it as spam', count: s => s.complainedCount},
-  {label: 'unsubscribed', count: s => s.unsubscribedCount},
-];
+function figureTone(figure: SupportingFigure, s: CampaignStats): string {
+  const count = figure.count(s);
+
+  if (figure.adverse) {
+    if (count === 0) return 'text-neutral-500';
+    if (count >= figure.adverse.minCount && figure.rate(s) >= figure.adverse.warnRate) return 'text-red-600';
+  }
+
+  return 'text-neutral-900';
+}
 
 export default function CampaignDetailsPage() {
   const router = useRouter();
   const {id} = router.query;
   const {activeProject} = useActiveProject();
 
+  // Set when a cancel comes back still CANCELLED but with its revert queued: the
+  // unsent emails are being cleared in the background and the campaign becomes a draft
+  // when that finishes. Polled rather than pushed, and given up on after a while --
+  // clearing a million rows outruns any sensible poll, and the page is correct either
+  // way once it is reloaded.
+  const [revertPending, setRevertPending] = useState(false);
+
   const {
     data: campaign,
     mutate,
     isLoading,
-  } = useSWR<{data: Campaign}>(id ? `/campaigns/${id}` : null, {revalidateOnFocus: false});
+  } = useSWR<{data: Campaign}>(id ? `/campaigns/${id}` : null, {
+    revalidateOnFocus: false,
+    refreshInterval: revertPending ? 5000 : 0,
+  });
+
+  // Stop polling the moment the cleanup promotes the campaign, and give up if it is
+  // taking longer than a poll is worth -- a very large cleanup finishes long after the
+  // user has moved on, and the next page load shows the truth regardless.
+  const revertedStatus = campaign?.data.status;
+  useEffect(() => {
+    if (!revertPending) return;
+
+    if (revertedStatus === CampaignStatus.DRAFT) {
+      setRevertPending(false);
+      toast.success('Campaign returned to draft');
+      return;
+    }
+
+    const giveUp = setTimeout(() => setRevertPending(false), 2 * 60 * 1000);
+    return () => clearTimeout(giveUp);
+  }, [revertPending, revertedStatus]);
 
   const {
     data: stats,
@@ -151,13 +227,31 @@ export default function CampaignDetailsPage() {
 
   const [dialog, setDialog] = useState<CampaignDialog>({type: 'none'});
 
+  // Which drill-down list is open, or null for none.
+  const [recipientList, setRecipientList] = useState<CampaignRecipientType | null>(null);
+
   // Automatically initialize edit fields when campaign is loaded and is a draft
   const isEditMode = campaign?.data.status === CampaignStatus.DRAFT;
 
   const handleCancel = async () => {
     try {
-      await network.fetch('POST', `/campaigns/${id}/cancel`);
-      toast.success('Campaign canceled');
+      // Three outcomes, and the confirmation reports the one that happened rather than
+      // asserting a cancellation: straight back to draft, cancelled for good, or
+      // stopped with the revert still draining in the background.
+      const res = await network.fetch<{data: {status: CampaignStatus}; revertPending?: boolean}>(
+        'POST',
+        `/campaigns/${id}/cancel`,
+      );
+
+      if (res.revertPending) {
+        setRevertPending(true);
+        toast.success('Campaign stopped. Clearing its unsent emails, then it returns to draft.');
+      } else {
+        toast.success(
+          res.data.status === CampaignStatus.DRAFT ? 'Campaign stopped and returned to draft' : 'Campaign canceled',
+        );
+      }
+
       void mutate();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Couldn’t cancel the campaign. Try again.');
@@ -171,6 +265,24 @@ export default function CampaignDetailsPage() {
       void router.push('/campaigns');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Couldn’t delete the campaign. Try again.');
+    }
+  };
+
+  /**
+   * Archive or restore. No confirmation: archiving destroys nothing, and the detail page
+   * stays on the campaign afterwards so the state change is visible in the header badge.
+   */
+  const handleSetArchived = async (archived: boolean) => {
+    try {
+      await network.fetch('POST', `/campaigns/${id}/${archived ? 'archive' : 'unarchive'}`);
+      toast.success(archived ? 'Campaign archived' : 'Campaign restored');
+      void mutate();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `Couldn\u2019t ${archived ? 'archive' : 'restore'} the campaign. Try again.`,
+      );
     }
   };
 
@@ -369,8 +481,36 @@ export default function CampaignDetailsPage() {
   const s = stats?.data;
   // Safe to add: the three counts are mutually exclusive per recipient.
   const lostContacts = s ? s.bouncedCount + s.complainedCount + s.unsubscribedCount : 0;
+
+  // A campaign can reach SENDING before its recipient count is known, so guard the divide,
+  // and clamp: sentCount is read partly from Redis and can briefly overshoot the total.
+  const sendProgress = s && s.totalRecipients > 0 ? Math.min((s.sentCount / s.totalRecipients) * 100, 100) : 0;
   // A scheduled campaign has stats, but they are all zero until it starts sending.
   const hasResults = c.status === CampaignStatus.SENDING || c.status === CampaignStatus.SENT;
+
+  // Cancelling has two very different outcomes, and the dialog has to name the one
+  // the user is about to get. A campaign with nothing sent comes back as an editable
+  // draft; once a single email is away the record is frozen for good. The sent count
+  // is a poll behind the send, so while a campaign is in flight this promises only
+  // what is certain -- already-delivered copies cannot be recalled.
+  const sentSoFar = s?.sentCount ?? 0;
+  const cancelCopy =
+    c.status === CampaignStatus.SCHEDULED || sentSoFar === 0
+      ? {
+          title: 'Stop this campaign?',
+          description:
+            c.status === CampaignStatus.SCHEDULED
+              ? 'Nothing has been sent yet, so the campaign returns to draft and stays editable.'
+              : 'Sending stops now. If nothing has gone out yet the campaign returns to draft; any contact who already received it keeps their copy.',
+          confirmText: 'Stop campaign',
+        }
+      : {
+          title: 'Cancel this campaign?',
+          description: `Sending stops now. The ${sentSoFar.toLocaleString()} ${
+            sentSoFar === 1 ? 'contact' : 'contacts'
+          } who already received it keep their copy, and the campaign is permanently cancelled.`,
+          confirmText: 'Cancel campaign',
+        };
 
   // Get recipient count for draft campaigns from the campaign's totalRecipients field
   // The backend calculates this for all audience types when the campaign is created/updated
@@ -464,6 +604,26 @@ export default function CampaignDetailsPage() {
                         <div className="flex flex-col gap-0.5 flex-1">
                           <span className="font-medium text-sm">Schedule for later</span>
                           <span className="text-xs text-neutral-500 leading-snug">Choose a specific date and time</span>
+                        </div>
+                      </div>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => void handleSetArchived(!c.archived)}
+                      className="py-3 cursor-pointer"
+                    >
+                      <div className="flex items-start gap-3">
+                        {c.archived ? (
+                          <ArchiveRestore className="h-4 w-4 mt-0.5 text-neutral-700" />
+                        ) : (
+                          <Archive className="h-4 w-4 mt-0.5 text-neutral-700" />
+                        )}
+                        <div className="flex flex-col gap-0.5 flex-1">
+                          <span className="font-medium text-sm">{c.archived ? 'Restore draft' : 'Archive draft'}</span>
+                          <span className="text-xs text-neutral-500 leading-snug">
+                            {c.archived
+                              ? 'Put it back on the campaigns list'
+                              : 'Hide it from the campaigns list without deleting it'}
+                          </span>
                         </div>
                       </div>
                     </DropdownMenuItem>
@@ -1013,13 +1173,21 @@ export default function CampaignDetailsPage() {
               <div className="flex items-center gap-2 sm:gap-3 mb-2">
                 <h1 className="text-2xl sm:text-3xl font-bold text-neutral-900 truncate">{c.name}</h1>
                 {getStatusBadge(c.status)}
+                {/* Explains, to someone who arrived by direct link, why this campaign is
+                    missing from the list. */}
+                {c.archived && (
+                  <Badge variant="neutral" className="shrink-0">
+                    <Archive className="h-3 w-3" />
+                    Archived
+                  </Badge>
+                )}
               </div>
               {c.description && <p className="text-neutral-500 text-sm sm:text-base">{c.description}</p>}
             </div>
           </div>
 
           {/* Actions */}
-          {(c.status === CampaignStatus.SCHEDULED || c.status === CampaignStatus.SENDING) && (
+          {c.status === CampaignStatus.SCHEDULED || c.status === CampaignStatus.SENDING ? (
             <div className="flex justify-end">
               <Button variant="destructive" onClick={() => setDialog({type: 'cancel'})} className="w-full sm:w-auto">
                 <XCircle className="h-4 w-4" />
@@ -1027,35 +1195,56 @@ export default function CampaignDetailsPage() {
                 <span className="sm:hidden">Cancel</span>
               </Button>
             </div>
+          ) : (
+            /* SENT and CANCELLED. This region was empty for them, and it is the natural place
+               to file a campaign away: the user has just finished reading its results. */
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                onClick={() => void handleSetArchived(!c.archived)}
+                className="w-full sm:w-auto"
+              >
+                {c.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+                {c.archived ? 'Restore campaign' : 'Archive campaign'}
+              </Button>
+            </div>
           )}
         </div>
 
-        {/* Sending Progress Banner */}
+        {/* Sending progress. The one place a bar belongs on this page: here it really does
+            mean "part of the send is still outstanding", and it disappears once it does not. */}
         {c.status === CampaignStatus.SENDING && s && (
           <Card>
             <CardContent className="pt-6">
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-4">
                   <div>
                     <h3 className="font-semibold text-neutral-900 text-lg">Sending in progress</h3>
-                    <p className="text-sm text-neutral-500 mt-1">
+                    <p className="text-sm text-neutral-500 mt-1 tabular-nums">
                       {s.sentCount.toLocaleString()} of {s.totalRecipients.toLocaleString()} emails sent
                     </p>
                   </div>
                   <div className="text-right">
-                    <div className="text-3xl font-bold text-neutral-900">
-                      {((s.sentCount / s.totalRecipients) * 100).toFixed(0)}%
+                    <div className="text-3xl font-semibold tracking-tight tabular-nums text-neutral-900">
+                      {sendProgress.toFixed(0)}%
                     </div>
                     <p className="text-xs text-neutral-500 mt-1">Complete</p>
                   </div>
                 </div>
-                <div className="w-full bg-neutral-100 rounded-full h-2">
+                <div
+                  role="progressbar"
+                  aria-valuenow={Math.round(sendProgress)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Emails sent"
+                  className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden"
+                >
                   <div
-                    className="bg-neutral-900 h-2 rounded-full transition-all duration-500"
-                    style={{width: `${(s.sentCount / s.totalRecipients) * 100}%`}}
+                    className="bg-neutral-900 h-2 rounded-full transition-[width] duration-500 ease-out motion-reduce:transition-none"
+                    style={{width: `${sendProgress}%`}}
                   />
                 </div>
-                <p className="text-xs text-neutral-400">Updating every 5 seconds</p>
+                <p className="text-xs text-neutral-400">Updating every 15 seconds</p>
               </div>
             </CardContent>
           </Card>
@@ -1087,25 +1276,30 @@ export default function CampaignDetailsPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-2">
-                <Skeleton className="h-10 w-40" />
-                <Skeleton className="h-4 w-48" />
-                <Skeleton className="h-2 w-full" />
+                <Skeleton className="h-12 w-48" />
+                <Skeleton className="h-4 w-72" />
               </div>
-              <Skeleton className="h-4 w-full max-w-md" />
-              <Skeleton className="h-4 w-full max-w-lg" />
+              <div className="grid grid-cols-2 gap-x-4 gap-y-5 border-t border-neutral-100 pt-5 sm:grid-cols-3 lg:grid-cols-5">
+                {Array.from({length: 5}).map((_, i) => (
+                  <div key={i} className="space-y-2">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-5 w-12" />
+                  </div>
+                ))}
+              </div>
             </CardContent>
           </Card>
         )}
 
         {/*
-          One panel, one focal point. The previous version gave every metric the same weight,
-          which meant the reader had to scan the whole thing to find the answer. Opens are the
-          headline because "did anyone read it" is the question this screen exists to answer;
-          delivery is a hygiene check and lives in the supporting line, and the three ways a
-          contact was lost sit quietest of all, since on a healthy campaign they are all zero.
+          One panel, one focal point. Opens are the headline because "did anyone read it" is
+          the question this screen exists to answer; everything else is a supporting column
+          under it, so the reader finds the answer before they start scanning.
 
-          Every figure reads number-first ("11 delivered", not "Delivered ... 11") so the
-          numbers form a single scannable column instead of pairs separated by whitespace.
+          There is deliberately no bar here. The previous version drew opens as a filled
+          track, and readers took a part-full bar on a finished campaign to mean the send
+          itself was part-finished. A percentage that says what it measures cannot be
+          misread that way.
         */}
         {hasResults && s && (
           <Card>
@@ -1119,70 +1313,76 @@ export default function CampaignDetailsPage() {
             <CardContent className="space-y-6">
               {/* Headline */}
               <div>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-4xl font-bold tabular-nums text-neutral-900">
-                    {s.openedCount.toLocaleString()}
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="text-4xl sm:text-5xl font-semibold tracking-tight tabular-nums text-neutral-900">
+                    <AnimatedNumber value={s.openedCount} />
                   </span>
-                  <span className="text-xl font-medium text-neutral-500">
+                  <span className="text-lg font-medium text-neutral-500">
                     {s.openedCount === 1 ? 'open' : 'opens'}
                   </span>
                 </div>
-                <p className="mt-1 text-sm text-neutral-500">
+                <p className="mt-2 text-sm text-neutral-500">
                   {s.sentCount > 0
-                    ? `${s.openRate.toFixed(1)}% of the ${s.sentCount.toLocaleString()} emails sent`
+                    ? `${s.openRate.toFixed(1)}% open rate, measured against the ${s.sentCount.toLocaleString()} ${
+                        s.sentCount === 1 ? 'email' : 'emails'
+                      } sent`
                     : 'Nothing has been sent yet'}
                 </p>
-                {/* Decorative: the percentage above states the same value. */}
-                <div aria-hidden className="mt-3 h-2 w-full overflow-hidden rounded-full bg-neutral-100">
-                  <div
-                    className="h-full rounded-full bg-neutral-900"
-                    style={{width: `${Math.min(s.openRate, 100)}%`}}
-                  />
-                </div>
               </div>
 
-              {/* Supporting reach figures, in funnel order */}
-              <div className="flex flex-wrap gap-x-6 gap-y-2 border-t border-neutral-100 pt-4 text-sm">
-                {REACH_FIGURES.map(figure => (
-                  <span key={figure.label} className="text-neutral-500">
-                    <span className="font-medium tabular-nums text-neutral-900">
-                      {figure.count(s).toLocaleString()}
-                    </span>{' '}
-                    {figure.label}
-                    {s.sentCount > 0 && (
-                      <span className="tabular-nums"> ({figure.rate(s).toFixed(1)}%)</span>
-                    )}
-                  </span>
-                ))}
-              </div>
+              {/* Supporting figures, in funnel order. Bounced and Spam reports open the
+                  contacts behind them; a figure with nobody in it stays inert, because a
+                  button that opens an empty list is a button that wasted a click. */}
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-5 border-t border-neutral-100 pt-5 sm:grid-cols-3 lg:grid-cols-5 lg:gap-x-0">
+                {SUPPORTING_FIGURES.map(figure => {
+                  const value = (
+                    <>
+                      <span className={`text-xl font-semibold tabular-nums ${figureTone(figure, s)}`}>
+                        {figure.count(s).toLocaleString()}
+                      </span>
+                      {s.sentCount > 0 && (
+                        <span className="text-xs tabular-nums text-neutral-500">{figure.rate(s).toFixed(1)}%</span>
+                      )}
+                    </>
+                  );
+                  const openable = figure.drillDown && figure.count(s) > 0;
 
-              {/* What it cost. Quietest row: on a healthy campaign every figure here is zero. */}
-              <div className="border-t border-neutral-100 pt-4">
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-                  <span className="font-medium tabular-nums text-neutral-900">
-                    {lostContacts.toLocaleString()}
-                  </span>
-                  <span className="text-neutral-500">
-                    {lostContacts === 1 ? 'contact lost' : 'contacts lost'}
-                    {s.sentCount > 0 && lostContacts > 0
-                      ? ` (${((lostContacts / s.sentCount) * 100).toFixed(1)}%)`
-                      : ''}
-                  </span>
-                  {lostContacts > 0 && (
-                    <span className="text-neutral-500">
-                      —{' '}
-                      {LOST_REASONS.filter(reason => reason.count(s) > 0)
-                        .map(reason => `${reason.count(s).toLocaleString()} ${reason.label}`)
-                        .join(', ')}
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1 text-xs text-neutral-400">
-                  {lostContacts > 0
-                    ? 'These contacts no longer receive marketing from this project.'
-                    : 'Nobody bounced, complained, or unsubscribed.'}
+                  return (
+                    <div
+                      key={figure.label}
+                      className="lg:border-l lg:border-neutral-100 lg:pl-5 lg:first:border-l-0 lg:first:pl-0"
+                    >
+                      <dt className="text-xs font-medium text-neutral-500">{figure.label}</dt>
+                      <dd className="mt-1">
+                        {openable ? (
+                          <button
+                            type="button"
+                            onClick={() => setRecipientList(figure.drillDown!)}
+                            className="-m-1 flex items-baseline gap-1.5 rounded-md p-1 underline decoration-neutral-300 underline-offset-4 transition-colors hover:decoration-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2"
+                          >
+                            {value}
+                            <span className="sr-only">
+                              {`Show the ${figure.count(s).toLocaleString()} ${figure.label.toLowerCase()} recipients`}
+                            </span>
+                          </button>
+                        ) : (
+                          <span className="flex items-baseline gap-1.5">{value}</span>
+                        )}
+                      </dd>
+                    </div>
+                  );
+                })}
+              </dl>
+
+              {/* Only worth a line when it happened: on a healthy campaign it is zero. */}
+              {lostContacts > 0 && (
+                <p className="border-t border-neutral-100 pt-4 text-xs text-neutral-500">
+                  <span className="font-medium tabular-nums text-neutral-900">{lostContacts.toLocaleString()}</span>{' '}
+                  {lostContacts === 1 ? 'contact' : 'contacts'} bounced, reported spam, or unsubscribed and no longer
+                  {' '}
+                  {lostContacts === 1 ? 'receives' : 'receive'} marketing from this project.
                 </p>
-              </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -1297,14 +1497,21 @@ export default function CampaignDetailsPage() {
         </div>
       </div>
 
+      <CampaignRecipientsSheet
+        campaignId={c.id}
+        type={recipientList}
+        onClose={() => setRecipientList(null)}
+      />
+
       <ConfirmDialog
         open={dialog.type === 'cancel'}
         onOpenChange={open => !open && setDialog({type: 'none'})}
         onConfirm={handleCancel}
-        title="Cancel this campaign?"
-        description="Sending stops now. Contacts who already received it keep their copy."
+        title={cancelCopy.title}
+        description={cancelCopy.description}
         cancelText="Keep sending"
-        confirmText="Cancel campaign"
+        icon={CircleStop}
+        confirmText={cancelCopy.confirmText}
         variant="destructive"
       />
     </DashboardLayout>

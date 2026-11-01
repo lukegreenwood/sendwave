@@ -21,6 +21,7 @@ import {DashboardLayout} from '../../components/DashboardLayout';
 import {KeyValueEditor} from '../../components/KeyValueEditor';
 import {ActivityFeed} from '../../components/ActivityFeed';
 import {network} from '../../lib/network';
+import {contactStatus, formatSnoozedUntil} from '../../lib/contactStatus';
 import {toast} from 'sonner';
 import useSWR from 'swr';
 import {ContactSchemas} from '@plunk/shared';
@@ -116,6 +117,8 @@ export default function ContactDetailPage() {
     );
   }
 
+  const status = contactStatus(contact);
+
   return (
     <>
       <NextSeo title={contact.email} />
@@ -129,13 +132,27 @@ export default function ContactDetailPage() {
               </Button>
               <div className="min-w-0">
                 <h1 className="text-2xl sm:text-3xl font-bold text-neutral-900 truncate">{contact.email}</h1>
+                {/*
+                  A snoozed contact is `subscribed = false`, so without the date this header
+                  would report a temporary pause as a lost subscriber. The return date is the
+                  one thing an operator looking at a snoozed contact wants to know, so it goes
+                  in the most prominent slot on the page rather than in the form below.
+                */}
                 <p className="mt-1">
                   <span
                     className={`inline-flex items-center px-2 sm:px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      contact.subscribed ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                      status === 'subscribed'
+                        ? 'bg-green-100 text-green-800'
+                        : status === 'snoozed'
+                          ? 'bg-neutral-100 text-neutral-700'
+                          : 'bg-red-100 text-red-800'
                     }`}
                   >
-                    {contact.subscribed ? 'Subscribed' : 'Unsubscribed'}
+                    {status === 'snoozed'
+                      ? `Snoozed until ${formatSnoozedUntil(contact.snoozedUntil)}`
+                      : status === 'subscribed'
+                        ? 'Subscribed'
+                        : 'Unsubscribed'}
                   </span>
                 </p>
               </div>
@@ -173,7 +190,14 @@ export default function ContactDetailPage() {
                           Subscribed to emails
                         </Label>
                         <p className="text-xs text-neutral-500 mt-0.5">
-                          {subscribed ? 'Receives emails from campaigns and workflows' : 'Will not receive emails'}
+                          {subscribed
+                            ? 'Receives emails from campaigns and workflows'
+                            : status === 'snoozed'
+                              ? // Saying only "will not receive emails" would hide the fact that
+                                // this reverses itself, and that turning the switch on here is
+                                // what ends it early.
+                                `Snoozed — resumes automatically on ${formatSnoozedUntil(contact.snoozedUntil)}`
+                              : 'Will not receive emails'}
                         </p>
                       </div>
                       <Switch id="subscribed" checked={subscribed} onCheckedChange={setSubscribed} />
@@ -202,7 +226,8 @@ export default function ContactDetailPage() {
                 <CardHeader>
                   <CardTitle>Activity</CardTitle>
                 </CardHeader>
-                <CardContent>
+                {/* The feed brings its own row padding and day headings */}
+                <CardContent className="border-t border-neutral-100 p-0">
                   <ActivityFeed contactId={id as string} />
                 </CardContent>
               </Card>

@@ -740,7 +740,7 @@ describe('SES MIME Boundary Structure', () => {
     const relatedBoundary = relatedBoundaryMatch ? relatedBoundaryMatch[1] : '';
 
     expect(rawMessage).toContain(`--${relatedBoundary}\nContent-Type: multipart/alternative`);
-    expect(rawMessage).toContain(`Content-Disposition: inline; filename="image.png"`);
+    expect(rawMessage).toContain(`Content-Disposition: inline;\n filename="image.png"`);
     expect(rawMessage).toContain(`--${relatedBoundary}--`);
   });
 
@@ -799,6 +799,145 @@ describe('SES MIME Boundary Structure', () => {
   });
 });
 
+// ========================================
+// SES PLAIN-TEXT ALTERNATIVE
+// ========================================
+// A multipart/alternative carrying only HTML is scored as filter evasion
+// (SpamAssassin MIME_HTML_ONLY +2.0, MPART_ALT_DIFF +0.7), so every message has to
+// carry a text/plain sibling.
+
+describe('SES plain-text alternative', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function sendAndCapture(content: {subject: string; html: string; text?: string}) {
+    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
+
+    await realSendRawEmail({
+      from: {name: 'Sender', email: 'sender@example.com'},
+      to: ['recipient@example.com'],
+      content,
+    });
+
+    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
+    return new TextDecoder().decode(callArgs.RawMessage.Data);
+  }
+
+  it('includes a text/plain part derived from the HTML', async () => {
+    const rawMessage = await sendAndCapture({
+      subject: 'Test Subject',
+      html: '<p>Hello world</p>',
+    });
+
+    expect(rawMessage).toContain('Content-Type: text/plain; charset=utf-8');
+    expect(rawMessage).toContain('Hello world');
+  });
+
+  it('places the text part before the HTML part', async () => {
+    const rawMessage = await sendAndCapture({
+      subject: 'Test Subject',
+      html: '<p>Hello world</p>',
+    });
+
+    // multipart/alternative is ordered least-rich first (RFC 2046 §5.1.4) and clients
+    // render the LAST part they understand. Reversed, every recipient sees plain text.
+    expect(rawMessage.indexOf('text/plain')).toBeLessThan(rawMessage.indexOf('text/html'));
+  });
+
+  it('carries link targets into the text part', async () => {
+    const rawMessage = await sendAndCapture({
+      subject: 'Test Subject',
+      html: '<p>Please <a href="https://example.com/reset">reset your password</a>.</p>',
+    });
+
+    // A text part that drops the URLs diverges from the HTML, which is the exact
+    // shape MPART_ALT_DIFF penalizes -- the thing this change exists to avoid.
+    expect(rawMessage).toContain('reset your password');
+    expect(rawMessage).toContain('https://example.com/reset');
+  });
+
+  it('prefers a caller-supplied text body over the conversion', async () => {
+    const rawMessage = await sendAndCapture({
+      subject: 'Test Subject',
+      html: '<p>Generated from HTML</p>',
+      text: 'Hand written plain text',
+    });
+
+    // Scoped to the text part: the HTML part still carries its own body, so asserting
+    // on the whole message would only prove the HTML survived.
+    const textPart = rawMessage.substring(
+      rawMessage.indexOf('Content-Type: text/plain'),
+      rawMessage.indexOf('Content-Type: text/html'),
+    );
+
+    expect(textPart).toContain('Hand written plain text');
+    expect(textPart).not.toContain('Generated from HTML');
+  });
+
+  it('omits the text part when the HTML has no readable content', async () => {
+    const rawMessage = await sendAndCapture({
+      subject: 'Test Subject',
+      html: '<html><body><img src="https://example.com/pixel.gif"></body></html>',
+    });
+
+    // An empty text part is worse than none: it advertises an alternative and then
+    // provides nothing, which is what the spam rules are actually looking for.
+    expect(rawMessage).not.toContain('Content-Type: text/plain');
+    expect(rawMessage).toContain('Content-Type: text/html');
+  });
+
+  it('encodes both parts as quoted-printable rather than claiming 7bit', async () => {
+    const rawMessage = await sendAndCapture({
+      subject: 'Test Subject',
+      html: '<p>Grüße aus München 🎉</p>',
+    });
+
+    // charset=utf-8 with CTE 7bit is a lie about the bytes on the wire as soon as the
+    // body contains a single non-ASCII character.
+    expect(rawMessage).not.toContain('Content-Transfer-Encoding: 7bit');
+    expect(rawMessage.match(/Content-Transfer-Encoding: quoted-printable/g)).toHaveLength(2);
+    expect(rawMessage).toContain('Gr=C3=BC=C3=9Fe');
+  });
+
+  it('keeps every body line within the RFC 5322 line limit', async () => {
+    const rawMessage = await sendAndCapture({
+      subject: 'Test Subject',
+      html: `<p>${'a very long sentence that keeps going '.repeat(80)}</p>`,
+    });
+
+    for (const line of rawMessage.split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(998);
+    }
+  });
+
+  it('still nests the text part inside the alternative container when attachments are present', async () => {
+    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
+
+    await realSendRawEmail({
+      from: {name: 'Sender', email: 'sender@example.com'},
+      to: ['recipient@example.com'],
+      content: {subject: 'Test Subject', html: '<p>Hello world</p>'},
+      attachments: [{filename: 'test.txt', content: 'SGVsbG8=', contentType: 'text/plain', disposition: 'attachment'}],
+    });
+
+    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
+    const rawMessage = new TextDecoder().decode(callArgs.RawMessage.Data);
+
+    const altMatch = rawMessage.match(/Content-Type: multipart\/alternative; boundary="([^"]+)"/);
+    const altBoundary = altMatch ? altMatch[1] : 'NOT_FOUND_ALT';
+
+    // The text part must sit inside the alternative container, not float in the mixed
+    // container where it would render as a second visible body.
+    const altSection = rawMessage.substring(
+      rawMessage.indexOf(`--${altBoundary}`),
+      rawMessage.indexOf(`--${altBoundary}--`),
+    );
+    expect(altSection).toContain('Content-Type: text/plain; charset=utf-8');
+    expect(altSection).toContain('Content-Type: text/html; charset=utf-8');
+  });
+});
+
 describe('SES header serialization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -850,5 +989,127 @@ describe('SES header serialization', () => {
     // terminate it (which would push the Content-Type into the body).
     expect(headerSection.endsWith('\n')).toBe(false);
     expect(headerSection).toContain('Content-Type:');
+  });
+
+  it('sends non-ASCII subjects and names as ASCII encoded-words', async () => {
+    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
+
+    await realSendRawEmail({
+      from: {name: 'Café Acmé', email: 'sender@example.com'},
+      to: [{name: 'Doe, Jane', email: 'jane@example.com'}],
+      content: {subject: '¡Novedades de otoño!', html: '<p>Hola</p>'},
+    });
+
+    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
+    const rawMessage = new TextDecoder().decode(callArgs.RawMessage.Data);
+    const [headerSection] = rawMessage.split('\n\n');
+
+    expect(headerSection).toMatch(/^[\x20-\x7E\n]*$/);
+    expect(headerSection).toContain('From: =?UTF-8?Q?Caf=C3=A9_Acm=C3=A9?= <sender@example.com>');
+    expect(headerSection).toContain('To: "Doe, Jane" <jane@example.com>');
+    expect(headerSection).toContain('Subject: =?UTF-8?Q?=C2=A1Novedades_de_oto=C3=B1o!?=');
+    // The display name travels in the From header; Source is only the identity.
+    expect(callArgs.Source).toBe('sender@example.com');
+  });
+
+  it('keeps Source and every header line short with a long non-ASCII sender name', async () => {
+    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
+
+    await realSendRawEmail({
+      from: {name: 'Café Acmé · Nutrición y bienestar para tu día a día', email: 'sender@example.com'},
+      to: [
+        {name: 'Pérez, Ana', email: 'ana@example.com'},
+        {name: 'Núñez, Íñigo', email: 'inigo@example.com'},
+      ],
+      content: {
+        subject: '🍂 ¡Novedades de otoño! Recetas, menús y una sorpresa especial para ti',
+        html: '<p>Hola</p>',
+      },
+    });
+
+    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
+    const rawMessage = new TextDecoder().decode(callArgs.RawMessage.Data);
+    const [headerSection] = rawMessage.split('\n\n');
+
+    expect(callArgs.Source).toBe('sender@example.com');
+    // RFC 2047 §2 limits lines that carry encoded-words to 76 characters.
+    for (const line of headerSection.split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(76);
+    }
+  });
+
+  it('encodes non-ASCII attachment filenames with RFC 2231', async () => {
+    const {sendRawEmail: realSendRawEmail, ses} = await vi.importActual<typeof import('../SESService')>('../SESService');
+
+    await realSendRawEmail({
+      from: {name: 'Sender', email: 'sender@example.com'},
+      to: ['recipient@example.com'],
+      content: {subject: 'Test Subject', html: '<p>Hello world</p>'},
+      attachments: [
+        {
+          filename: 'Menú otoño.pdf',
+          content: 'SGVsbG8=',
+          contentType: 'application/pdf',
+          disposition: 'attachment' as const,
+        },
+      ],
+    });
+
+    const callArgs = (ses.sendRawEmail as Mock).mock.calls[0][0];
+    const rawMessage = new TextDecoder().decode(callArgs.RawMessage.Data);
+
+    expect(rawMessage).toContain(`Content-Disposition: attachment;\n filename*=UTF-8''Men%C3%BA%20oto%C3%B1o.pdf`);
+    expect(rawMessage).toMatch(/^[\x20-\x7E\n]*$/);
+  });
+});
+
+/**
+ * Regression tests for the RegExp-injection / ReDoS advisory.
+ *
+ * The /v1/send renderer used to build a `new RegExp` per contact-data key. Contact data
+ * keys are attacker-controlled on the public /v1/track endpoint, so a key like `(` threw a
+ * SyntaxError (persistent 500 on every send to that contact) and `(.+)+$` drove the event
+ * loop into catastrophic backtracking (DoS). Rendering now goes through the shared
+ * `renderTemplate` (EmailService.format), which treats names as data and never throws.
+ */
+describe('Template rendering — hostile contact data keys (no DB)', () => {
+  it('does not throw when a data key is an invalid regular expression', () => {
+    const run = () =>
+      EmailService.format({
+        subject: 'Hello {{name}}',
+        body: 'Body {{name}}',
+        // `(` would have produced `/\{\{\s*(\s*\}\}/` — an unterminated group.
+        data: {'(': 'x', name: 'Jane'},
+      });
+
+    expect(run).not.toThrow();
+    const {subject, body} = run();
+    expect(subject).toBe('Hello Jane');
+    expect(body).toBe('Body Jane');
+  });
+
+  it('renders promptly when a data key is a catastrophic-backtracking pattern', () => {
+    // A long unmatched `{{aaaa...` run is exactly the input that made `(.+)+$` hang.
+    const body = `{{${'a'.repeat(50_000)}`;
+
+    const start = Date.now();
+    const result = EmailService.format({
+      subject: 's',
+      body,
+      data: {'(.+)+$': 'x'},
+    });
+    const elapsedMs = Date.now() - start;
+
+    // The old code blocked the event loop for the full request timeout (60s+).
+    expect(elapsedMs).toBeLessThan(1_000);
+    // Unterminated placeholder is left as-is; the point is that it returns at all.
+    expect(result.body).toContain('a'.repeat(100));
+  });
+
+  it('still supports plain and fallback placeholders', () => {
+    expect(EmailService.format({subject: 'Hi {{name}}', body: 'x', data: {name: 'Jo'}}).subject).toBe('Hi Jo');
+    expect(EmailService.format({subject: 'Hi {{name ?? Guest}}', body: 'x', data: {}}).subject).toBe('Hi Guest');
+    // A missing field with no fallback renders empty rather than leaking `{{...}}`.
+    expect(EmailService.format({subject: 'Hi {{missing}}', body: 'x', data: {}}).subject).toBe('Hi ');
   });
 });

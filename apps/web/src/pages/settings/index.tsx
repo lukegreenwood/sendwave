@@ -4,20 +4,13 @@ import {zodResolver} from '@hookform/resolvers/zod';
 import {ProjectSchemas, SUPPORTED_LANGUAGES} from '@plunk/shared';
 import {TrackingMode} from '@plunk/db';
 import {
-  Alert,
-  AlertDescription,
   Button,
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
+  ConfirmDialog,
   Form,
   FormControl,
   FormDescription,
@@ -39,7 +32,18 @@ import {
 } from '@plunk/ui';
 import {AnimatePresence, motion} from 'framer-motion';
 import {NextSeo} from 'next-seo';
-import {AlertTriangle, CreditCard, Database, Globe, Mail, Settings as SettingsIcon, Shield, Users} from 'lucide-react';
+import {
+  AlertTriangle,
+  CreditCard,
+  Database,
+  Globe,
+  KeyRound,
+  Mail,
+  RotateCcw,
+  Settings as SettingsIcon,
+  Shield,
+  Users,
+} from 'lucide-react';
 import type {z} from 'zod';
 import {useRouter} from 'next/router';
 import {DashboardLayout} from '../../components/DashboardLayout';
@@ -70,6 +74,16 @@ interface Tab {
   condition?: boolean;
 }
 
+/** Why sending is paused, for the pauses the customer clears by updating their card. */
+const BILLING_PAUSE_COPY: Record<string, string> = {
+  PAYMENT_FAILED:
+    'Your last payment didn’t go through. Add a working card and we’ll retry the payment straight away. Sending resumes once it’s paid.',
+  CARD_VERIFICATION_FAILED:
+    'Your card declined the charge we use to confirm it supports monthly billing. Add a standard credit or debit card (prepaid cards aren’t supported) and we’ll verify it straight away.',
+  CARD_VERIFICATION_REQUIRED:
+    'Your bank didn’t approve the charge we use to confirm your card supports monthly billing. Add your card again, or a different one, and we’ll verify it straight away.',
+};
+
 const buildTabs = (options: {billingEnabled: boolean; smtpEnabled: boolean}): Tab[] => {
   const {billingEnabled, smtpEnabled} = options;
   const allTabs: Tab[] = [
@@ -92,8 +106,6 @@ export default function Settings() {
   const {data: user} = useUser();
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [deleteConfirmText, setDeleteConfirmText] = useState('');
-  const [resetConfirmText, setResetConfirmText] = useState('');
 
   type SettingsDialog = {type: 'none'} | {type: 'regenerate'} | {type: 'delete'} | {type: 'reset'};
   const [dialog, setDialog] = useState<SettingsDialog>({type: 'none'});
@@ -113,6 +125,7 @@ export default function Settings() {
   const {securityMetrics, isLoading: isLoadingSecurityMetrics} = useProjectSecurity(activeProject?.id);
 
   const billingEnabled = config?.features.billing.enabled ?? false;
+  const billingPause = activeProject?.disabled ? BILLING_PAUSE_COPY[activeProject.disabledReason ?? ''] : undefined;
   const smtpEnabled = config?.features.smtp.enabled ?? false;
   const trackingToggleEnabled = config?.features.email.trackingToggleEnabled ?? false;
   const smtpConfig = smtpEnabled
@@ -305,7 +318,7 @@ export default function Settings() {
   };
 
   const handleResetProject = async () => {
-    if (!activeProject || resetConfirmText !== 'RESET') return;
+    if (!activeProject) return;
 
     try {
       setErrorMessage(null);
@@ -315,7 +328,6 @@ export default function Settings() {
 
       setSuccessMessage('Project reset. All campaigns, contacts, workflows, templates, and events are gone.');
       setDialog({type: 'none'});
-      setResetConfirmText('');
 
       // Refresh the page to reload data
       setTimeout(() => {
@@ -324,12 +336,11 @@ export default function Settings() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Couldn’t reset the project. Try again.');
       setDialog({type: 'none'});
-      setResetConfirmText('');
     }
   };
 
   const handleDeleteProject = async () => {
-    if (!activeProject || deleteConfirmText !== 'DELETE') return;
+    if (!activeProject) return;
 
     try {
       setErrorMessage(null);
@@ -339,7 +350,6 @@ export default function Settings() {
 
       setSuccessMessage('Project deleted. Redirecting…');
       setDialog({type: 'none'});
-      setDeleteConfirmText('');
 
       // Refresh projects list and redirect to dashboard
       await projectsMutate();
@@ -351,7 +361,6 @@ export default function Settings() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Couldn’t delete the project. Try again.');
       setDialog({type: 'none'});
-      setDeleteConfirmText('');
     }
   };
 
@@ -663,20 +672,30 @@ export default function Settings() {
                       {activeProject.subscription ? (
                         // Has subscription - show billing portal button
                         <div className="space-y-4">
-                          <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                            <div className="flex items-center gap-2 text-green-800 mb-2">
-                              <CreditCard className="h-5 w-5" />
-                              <span className="font-medium">Active subscription</span>
+                          {billingPause ? (
+                            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                              <div className="flex items-center gap-2 text-amber-900 mb-2">
+                                <CreditCard className="h-5 w-5" />
+                                <span className="font-medium">Sending paused: update your card</span>
+                              </div>
+                              <p className="text-sm text-amber-800">{billingPause}</p>
                             </div>
-                            <p className="text-sm text-green-700">
-                              Your subscription is active. Manage your billing details, update payment methods, or
-                              cancel your subscription through the billing portal.
-                            </p>
-                          </div>
+                          ) : (
+                            <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                              <div className="flex items-center gap-2 text-green-800 mb-2">
+                                <CreditCard className="h-5 w-5" />
+                                <span className="font-medium">Active subscription</span>
+                              </div>
+                              <p className="text-sm text-green-700">
+                                Your subscription is active. Manage your billing details, update payment methods, or
+                                cancel your subscription through the billing portal.
+                              </p>
+                            </div>
+                          )}
 
                           <div className="flex justify-start">
                             <Button onClick={handleManageBilling} disabled={isLoadingBilling}>
-                              {isLoadingBilling ? 'Loading…' : 'Manage Billing'}
+                              {isLoadingBilling ? 'Loading…' : billingPause ? 'Update card' : 'Manage Billing'}
                             </Button>
                           </div>
                         </div>
@@ -689,18 +708,16 @@ export default function Settings() {
                               <span className="font-medium">No active subscription</span>
                             </div>
                             <p className="text-sm text-neutral-600">
-                              Activation places two charges of 1.00 on your card, both credited back in full. It costs
-                              you nothing.
+                              Activation places one charge of 2.00 on your card, credited back in full to your usage.
                             </p>
                             <details className="group mt-2">
                               <summary className="cursor-pointer text-xs text-neutral-500 hover:text-neutral-700 transition-colors list-none">
-                                Why two charges?
+                                Why the charge?
                               </summary>
                               <p className="mt-2 text-xs text-neutral-500">
-                                The first is a one-time onboarding fee. The second runs straight afterwards to confirm
-                                your card accepts automatic monthly billing. Prepaid, virtual, and single-use cards
-                                often accept a payment you approve yourself but refuse recurring charges later, so we
-                                check now rather than a month in.
+                                It runs right after checkout to confirm your card accepts automatic monthly billing.
+                                Prepaid, virtual, and single-use cards often accept a payment you approve yourself but
+                                refuse recurring charges later, so we check now rather than a month in.
                               </p>
                             </details>
                           </div>
@@ -821,144 +838,47 @@ export default function Settings() {
           </Tabs>
         </div>
 
-        {/* Regenerate Keys Confirmation Dialog */}
-        <Dialog open={dialog.type === 'regenerate'} onOpenChange={open => !open && setDialog({type: 'none'})}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-600" />
-                Regenerate API keys?
-              </DialogTitle>
-              <DialogDescription className="space-y-3">
-                <Alert variant="warning">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>
-                    Your current keys stop working <strong>immediately</strong>. Every integration using them fails
-                    until you swap in the new keys.
-                  </AlertDescription>
-                </Alert>
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDialog({type: 'none'})}>
-                Cancel
-              </Button>
-              <Button variant="destructive" onClick={handleRegenerateKeys}>
-                Regenerate keys
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <ConfirmDialog
+          open={dialog.type === 'regenerate'}
+          onOpenChange={open => !open && setDialog({type: 'none'})}
+          onConfirm={handleRegenerateKeys}
+          title="Regenerate API keys?"
+          description="Your current keys stop working immediately. Every integration using them fails until you swap in the new ones."
+          icon={KeyRound}
+          confirmText="Regenerate keys"
+          loadingText="Regenerating…"
+          variant="destructive"
+        />
 
-        {/* Reset Project Confirmation Dialog */}
-        <Dialog open={dialog.type === 'reset'} onOpenChange={open => !open && setDialog({type: 'none'})}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader className="space-y-3">
-              <div className="mx-auto w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center">
-                <Database className="h-6 w-6 text-amber-700" />
-              </div>
-              <DialogTitle className="text-center text-xl">Reset Project Data?</DialogTitle>
-              <DialogDescription className="text-center text-base">
-                All your campaigns, contacts, workflows, and templates will be permanently deleted. Your API keys and
-                settings will remain intact.
-              </DialogDescription>
-            </DialogHeader>
+        <ConfirmDialog
+          open={dialog.type === 'reset'}
+          onOpenChange={open => !open && setDialog({type: 'none'})}
+          onConfirm={handleResetProject}
+          title="Reset project data?"
+          description="Every campaign, contact, workflow, template and event in this project is deleted. Your API keys, domains and billing stay as they are."
+          icon={RotateCcw}
+          confirmPhrase="RESET"
+          confirmText="Reset data"
+          loadingText="Resetting…"
+          variant="destructive"
+        />
 
-            <div className="py-4">
-              <label className="text-sm font-medium text-neutral-700 block mb-2 text-center">
-                Type{' '}
-                <span className="font-mono font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded">RESET</span>{' '}
-                to confirm
-              </label>
-              <Input
-                value={resetConfirmText}
-                onChange={e => setResetConfirmText(e.target.value)}
-                placeholder="Type RESET here"
-                className="text-center"
-                autoFocus
-              />
-            </div>
+        <ConfirmDialog
+          open={dialog.type === 'delete'}
+          onOpenChange={open => !open && setDialog({type: 'none'})}
+          onConfirm={handleDeleteProject}
+          title={`Delete ${activeProject.name}?`}
+          description={
+            activeProject.subscription
+              ? 'This permanently deletes the project and everything in it, and cancels its subscription. It cannot be undone.'
+              : 'This permanently deletes the project and everything in it. It cannot be undone.'
+          }
+          confirmPhrase="DELETE"
+          confirmText="Delete project"
+          loadingText="Deleting…"
+          variant="destructive"
+        />
 
-            <DialogFooter className="flex-col-reverse gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setDialog({type: 'none'});
-                  setResetConfirmText('');
-                }}
-                className="w-full"
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={handleResetProject}
-                disabled={resetConfirmText !== 'RESET'}
-                className="w-full"
-              >
-                Reset data
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* Delete Project Confirmation Dialog */}
-        <Dialog open={dialog.type === 'delete'} onOpenChange={open => !open && setDialog({type: 'none'})}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader className="space-y-3">
-              <div className="mx-auto w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-                <AlertTriangle className="h-6 w-6 text-red-600" />
-              </div>
-              <DialogTitle className="text-center text-xl">Delete Project Permanently?</DialogTitle>
-              <DialogDescription className="text-center text-base space-y-2">
-                <p>
-                  This will <strong className="text-red-600">permanently delete</strong> your entire project and all
-                  data. This action cannot be undone.
-                </p>
-                {activeProject?.subscription && (
-                  <p className="text-sm text-red-700 bg-red-50 rounded p-2 border border-red-200">
-                    Your active subscription will be canceled
-                  </p>
-                )}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="py-4">
-              <label className="text-sm font-medium text-neutral-700 block mb-2 text-center">
-                Type <span className="font-mono font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded">DELETE</span>{' '}
-                to confirm
-              </label>
-              <Input
-                value={deleteConfirmText}
-                onChange={e => setDeleteConfirmText(e.target.value)}
-                placeholder="Type DELETE here"
-                className="text-center"
-                autoFocus
-              />
-            </div>
-
-            <DialogFooter className="flex-col-reverse gap-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setDialog({type: 'none'});
-                  setDeleteConfirmText('');
-                }}
-                className="w-full"
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={handleDeleteProject}
-                disabled={deleteConfirmText !== 'DELETE'}
-                className="w-full"
-              >
-                Delete forever
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </DashboardLayout>
     </>
   );

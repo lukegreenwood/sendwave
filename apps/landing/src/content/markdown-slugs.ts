@@ -1,6 +1,7 @@
 export const MARKDOWN_SLUGS: ReadonlySet<string> = new Set([
   'index',
   'pricing',
+  'changelog',
   'features/workflows',
   'features/segments',
   'features/inbound-email',

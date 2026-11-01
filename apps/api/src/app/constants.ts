@@ -38,6 +38,11 @@ export const S3_ACCESS_KEY_SECRET = validateEnv('S3_ACCESS_KEY_SECRET', '');
 export const S3_BUCKET = validateEnv('S3_BUCKET', 'uploads');
 export const S3_PUBLIC_URL = validateEnv('S3_PUBLIC_URL', '');
 export const S3_FORCE_PATH_STYLE = validateEnv('S3_FORCE_PATH_STYLE', 'true') === 'true';
+// Optional folder inside the bucket for uploads (e.g. `plunk`), so the bucket can be
+// shared with other applications. Leading and trailing slashes are ignored.
+export const S3_PREFIX = validateEnv('S3_PREFIX', '')
+  .trim()
+  .replace(/^\/+|\/+$/g, '');
 export const S3_ENABLED = S3_ACCESS_KEY_ID !== '' && S3_ACCESS_KEY_SECRET !== '';
 
 // AWS SES (required for email sending)
@@ -92,7 +97,6 @@ export const STRIPE_WEBHOOK_SECRET = validateEnv('STRIPE_WEBHOOK_SECRET', '');
 export const STRIPE_ENABLED = STRIPE_SK !== '' && STRIPE_WEBHOOK_SECRET !== '';
 
 // Stripe Pricing Configuration
-export const STRIPE_PRICE_ONBOARDING = validateEnv('STRIPE_PRICE_ONBOARDING', ''); // One-time onboarding fee
 export const STRIPE_PRICE_EMAIL_USAGE = validateEnv('STRIPE_PRICE_EMAIL_USAGE', ''); // Metered usage price for pay-per-email
 export const STRIPE_METER_EVENT_NAME = validateEnv('STRIPE_METER_EVENT_NAME', 'emails'); // Meter event name (API key in Stripe)
 
@@ -129,6 +133,9 @@ export const AUTO_PROJECT_DISABLE = validateEnv('AUTO_PROJECT_DISABLE', 'true') 
 export const DISABLE_SIGNUPS = process.env.DISABLE_SIGNUPS === 'true';
 // Controls whether email validation checks are performed on signup (default: false)
 export const VERIFY_EMAIL_ON_SIGNUP = process.env.VERIFY_EMAIL_ON_SIGNUP === 'true';
+// Controls whether the sponsor link is shown in the dashboard navigation (default: true)
+// Disable this on hosted instances where sponsorship prompts are not relevant
+export const SHOW_SPONSOR = validateEnv('SHOW_SPONSOR', 'true') === 'true';
 
 // Attachment Limits (optional)
 // Maximum total attachment size in MB (default: 10). AWS SES supports up to 40 MB.
@@ -169,6 +176,9 @@ export const TOKEN_EXPIRY_SECONDS = 3600; // 1 hour
 export const EMAIL_VERIFICATION_RATE_LIMIT = 3; // Max 3 emails per hour
 export const PASSWORD_RESET_RATE_LIMIT = 3; // Max 3 emails per hour
 export const EMAIL_VERIFICATION_RATE_WINDOW = 3600; // 1 hour in seconds
+// Authenticated password change: bounds guesses at the current password
+export const PASSWORD_CHANGE_RATE_LIMIT = 5; // Max 5 attempts per window
+export const PASSWORD_CHANGE_RATE_WINDOW = 900; // 15 minutes in seconds
 
 // Phishing Detection (optional)
 // OpenRouter API integration for content safety checks

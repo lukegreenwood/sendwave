@@ -1,5 +1,4 @@
 import {
-  Badge,
   Button,
   Card,
   CardContent,
@@ -18,7 +17,7 @@ import {
 } from '@plunk/ui';
 import type {Contact} from '@plunk/db';
 import {ContactSchemas} from '@plunk/shared';
-import type {CursorPaginatedResponse} from '@plunk/types';
+import type {BulkContactActionSelector, ContactSubscriptionStatus, CursorPaginatedResponse} from '@plunk/types';
 import {
   getCoreRowModel,
   useReactTable,
@@ -32,11 +31,11 @@ import {
   BulkActionBar,
   DataTable,
   DataTableColumnHeader,
-  DataTableFacetedFilter,
-  DataTableFilter,
   DataTableViewOptions,
   DataTableViewSwitcher,
+  FilterPill,
   NoResultsState,
+  SearchInput,
   isDataTableView,
   type DataTableColumnMeta,
   type DataTableView,
@@ -44,6 +43,7 @@ import {
 } from '../../components/data-table';
 import {KeyValueEditor} from '../../components/KeyValueEditor';
 import {network} from '../../lib/network';
+import {ContactStatusBadge, ContactStatusIcon} from '../../lib/contactStatus';
 import {formatRelativeTime} from '../../lib/dateUtils';
 import {useColumnVisibility} from '../../lib/hooks/useColumnVisibility';
 import {usePersistentState} from '../../lib/hooks/usePersistentState';
@@ -54,6 +54,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit,
+  EyeOff,
   FileUp,
   Loader2,
   Mail,
@@ -61,10 +62,8 @@ import {
   MailX,
   Minus,
   Plus,
-  Search,
   Trash2,
   Upload,
-  X,
   XCircle,
 } from 'lucide-react';
 import {NextSeo} from 'next-seo';
@@ -74,15 +73,17 @@ import {toast} from 'sonner';
 import useSWR from 'swr';
 import dayjs from 'dayjs';
 
-type StatusFilter = 'ALL' | 'subscribed' | 'unsubscribed';
+type StatusFilter = 'ALL' | ContactSubscriptionStatus;
 
 const VIEW_STORAGE_KEY = 'plunk:contacts:view';
 const COLUMNS_STORAGE_KEY = 'plunk:contacts:columns';
 
-// Fixed-value options for the Status faceted filter (table header) and the
-// card-view toolbar dropdown. Single source of truth for both.
+// Fixed-value options for the Status filter pill.
 const STATUS_OPTIONS: FacetedFilterOption[] = [
   {value: 'subscribed', label: 'Subscribed'},
+  // Snoozed contacts are `subscribed = false` and would otherwise hide inside Unsubscribed,
+  // where they read as churn rather than as people who are coming back.
+  {value: 'snoozed', label: 'Snoozed'},
   {value: 'unsubscribed', label: 'Unsubscribed'},
 ];
 
@@ -121,15 +122,15 @@ export default function ContactsPage() {
   const pageSize = 50;
 
   // Backend is authoritative for sorting + status filtering
-  // (?sort=&dir=, ?subscribed=); the client only mirrors the active state.
+  // (?sort=&dir=, ?status=); the client only mirrors the active state.
   const sortParam = sorting[0]?.id ?? '';
   const dirParam = sorting[0] ? (sorting[0].desc ? 'desc' : 'asc') : '';
-  const subscribedParam = statusFilter === 'subscribed' ? 'true' : statusFilter === 'unsubscribed' ? 'false' : '';
+  const statusParam = statusFilter === 'ALL' ? '' : statusFilter;
 
   const {data, mutate, isLoading} = useSWR<CursorPaginatedResponse<Contact>>(
     `/contacts?limit=${pageSize}${cursor ? `&cursor=${cursor}` : ''}${
       search ? `&search=${encodeURIComponent(search)}` : ''
-    }${subscribedParam ? `&subscribed=${subscribedParam}` : ''}${sortParam ? `&sort=${sortParam}&dir=${dirParam}` : ''}`,
+    }${statusParam ? `&status=${statusParam}` : ''}${sortParam ? `&sort=${sortParam}&dir=${dirParam}` : ''}`,
     {revalidateOnFocus: false},
   );
 
@@ -271,6 +272,20 @@ export default function ContactsPage() {
     ? Math.max(0, totalCount - excludedContacts.size)
     : selectedContacts.size;
 
+  // What a bulk action targets. "Select all matching" mirrors the active list filters so it
+  // reaches exactly the rows the user is looking at, minus the ones they unticked.
+  const bulkSelector = useMemo<BulkContactActionSelector>(
+    () =>
+      selectAllMatching
+        ? {
+            mode: 'query',
+            filter: {...(search ? {search} : {}), ...(statusFilter !== 'ALL' ? {status: statusFilter} : {})},
+            excludeIds: Array.from(excludedContacts),
+          }
+        : {mode: 'ids', contactIds: Array.from(selectedContacts)},
+    [selectAllMatching, search, statusFilter, excludedContacts, selectedContacts],
+  );
+
   const handleBulkAction = (operation: 'subscribe' | 'unsubscribe' | 'delete') => {
     setBulkOperation(operation);
     setShowBulkActionsDialog(true);
@@ -348,11 +363,7 @@ export default function ContactsPage() {
         header: ({column}) => <DataTableColumnHeader column={column}>Email</DataTableColumnHeader>,
         cell: ({row}) => (
           <div className="flex items-center gap-2">
-            {row.original.subscribed ? (
-              <MailCheck className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
-            ) : (
-              <MailX className="h-4 w-4 shrink-0 text-red-600" aria-hidden="true" />
-            )}
+            <ContactStatusIcon contact={row.original} />
             <Link
               href={`/contacts/${row.original.id}`}
               className="text-sm font-medium text-neutral-900 hover:text-neutral-700 focus-visible:outline-none focus-visible:underline"
@@ -370,23 +381,12 @@ export default function ContactsPage() {
         header: ({column}) => (
           <DataTableColumnHeader
             column={column}
-            filter={
-              <DataTableFacetedFilter
-                title="Status"
-                multiple={false}
-                options={STATUS_OPTIONS}
-                selected={statusFilter === 'ALL' ? [] : [statusFilter]}
-                onChange={next => handleStatusChange((next[0] as StatusFilter) ?? 'ALL')}
-              />
-            }
           >
             Status
           </DataTableColumnHeader>
         ),
         cell: ({row}) => (
-          <Badge variant={row.original.subscribed ? 'success' : 'destructive'}>
-            {row.original.subscribed ? 'Subscribed' : 'Unsubscribed'}
-          </Badge>
+          <ContactStatusBadge contact={row.original} />
         ),
       },
       {
@@ -491,46 +491,29 @@ export default function ContactsPage() {
 
           {/* Control row. One aligned cluster of 32px-tall controls:
               - Search input: always present (both views).
-              - Status filter: CARD VIEW ONLY, as a toolbar dropdown matching the
-                Columns selector. In table view the Status filter lives in the
-                column header facet instead (same shared menu body).
+              - Status filter: a FilterPill, the same in both views.
               - Columns selector: TABLE VIEW ONLY.
               - A hairline divider separates the data controls from the view switcher. */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-400" />
-              <Input
-                type="text"
-                placeholder="Search by email…"
-                value={searchInput}
-                onChange={e => setSearchInput(e.target.value)}
-                className="pl-10 pr-10 h-8 text-xs"
-              />
-              {searchInput && (
-                <button
-                  type="button"
-                  aria-label="Clear search"
-                  onClick={() => {
-                    setSearchInput('');
-                    setSearch('');
-                    resetPagination();
-                  }}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 transition-colors"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
+            <SearchInput
+              value={searchInput}
+              onChange={setSearchInput}
+              onClear={() => {
+                setSearchInput('');
+                setSearch('');
+                resetPagination();
+              }}
+              placeholder="Search by email…"
+              className="flex-1"
+            />
             <div className="flex items-center gap-2 shrink-0">
-              {view === 'card' && (
-                <DataTableFilter
-                  title="Status"
-                  multiple={false}
-                  options={STATUS_OPTIONS}
-                  selected={statusFilter === 'ALL' ? [] : [statusFilter]}
-                  onChange={next => handleStatusChange((next[0] as StatusFilter) ?? 'ALL')}
-                />
-              )}
+              <FilterPill
+                title="Status"
+                multiple={false}
+                options={STATUS_OPTIONS}
+                selected={statusFilter === 'ALL' ? [] : [statusFilter]}
+                onChange={next => handleStatusChange((next[0] as StatusFilter) ?? 'ALL')}
+              />
               {view === 'table' && (
                 <DataTableViewOptions table={table} lockedColumnIds={['select', 'email', 'actions']} />
               )}
@@ -640,16 +623,12 @@ export default function ContactsPage() {
                                 href={`/contacts/${contact.id}`}
                                 className="flex min-w-0 items-center gap-2 text-sm font-medium text-neutral-900 hover:text-neutral-700 focus-visible:outline-none focus-visible:underline"
                               >
-                                {contact.subscribed ? (
-                                  <MailCheck className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
-                                ) : (
-                                  <MailX className="h-4 w-4 shrink-0 text-red-600" aria-hidden="true" />
-                                )}
+                                <ContactStatusIcon contact={contact} />
                                 <span className="truncate">{contact.email}</span>
                               </Link>
-                              <Badge variant={contact.subscribed ? 'success' : 'destructive'} className="shrink-0">
-                                {contact.subscribed ? 'Subscribed' : 'Unsubscribed'}
-                              </Badge>
+                              <div className="shrink-0">
+                                <ContactStatusBadge contact={contact} />
+                              </div>
                             </div>
                             <div className="mt-3 flex items-center justify-between">
                               <div className="group relative inline-block cursor-help">
@@ -768,20 +747,7 @@ export default function ContactsPage() {
           open={showBulkActionsDialog}
           onOpenChange={setShowBulkActionsDialog}
           operation={bulkOperation}
-          selector={
-            selectAllMatching
-              ? {
-                  mode: 'query',
-                  // Mirror the active list filters so "select all matching"
-                  // targets exactly the rows the user is looking at.
-                  filter: {
-                    ...(search ? {search} : {}),
-                    ...(statusFilter !== 'ALL' ? {subscribed: statusFilter === 'subscribed'} : {}),
-                  },
-                  excludeIds: Array.from(excludedContacts),
-                }
-              : {mode: 'ids', contactIds: Array.from(selectedContacts)}
-          }
+          selector={bulkSelector}
           targetCount={effectiveSelectionCount}
           onSuccess={() => {
             mutate();
@@ -1209,21 +1175,17 @@ function ImportContactsDialog({open, onOpenChange, onSuccess}: ImportContactsDia
         description="The import keeps running in the background. You just won't see the result here."
         cancelText="Keep watching"
         confirmText="Close anyway"
-        variant="destructive"
+        icon={EyeOff}
       />
     </>
   );
 }
 
-type BulkSelector =
-  | {mode: 'ids'; contactIds: string[]}
-  | {mode: 'query'; filter: {search?: string; subscribed?: boolean}; excludeIds: string[]};
-
 interface BulkActionsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   operation: 'subscribe' | 'unsubscribe' | 'delete' | null;
-  selector: BulkSelector;
+  selector: BulkContactActionSelector;
   targetCount: number;
   onSuccess: () => void;
 }
@@ -1497,7 +1459,7 @@ function BulkActionsDialog({open, onOpenChange, operation, selector, targetCount
         description="The job keeps running and your contacts are still updated. You just won't see the result here."
         cancelText="Keep watching"
         confirmText="Hide"
-        variant="default"
+        icon={EyeOff}
       />
     </>
   );
