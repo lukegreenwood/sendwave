@@ -78,32 +78,6 @@ services:
   #     timeout: 20s
   #     retries: 3
 
-  ntfy:
-    image: binwiederhier/ntfy:latest
-    container_name: plunk-ntfy
-    restart: unless-stopped
-    command: serve
-    environment:
-      - TZ=UTC
-    volumes:
-      - ntfy_cache:/var/cache/ntfy
-      - ntfy_etc:/etc/ntfy
-    ports:
-      # Expose ntfy web UI and API
-      - '${NTFY_PORT:-8080}:80'
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          "wget -q --tries=1 http://localhost:80/v1/health -O - | grep -Eo '\"healthy\"\\s*:\\s*true' || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - coolify
-
   # ============================================
   # Plunk Application
   # ============================================
@@ -203,8 +177,7 @@ services:
       S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://localhost:9000/uploads}
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
 
-      # Notifications (ntfy.sh)
-      NTFY_URL: ${NTFY_URL:-http://ntfy/plunk-notifications}
+      NTFY_URL: ${NTFY_URL:-}
 
       # SMTP Server (for sending emails via SMTP)
       # SMTP_DOMAIN is required to select the correct certificate from Traefik acme.json
@@ -246,15 +219,13 @@ services:
       # - "4000:4000"  # Landing
       # - "1000:1000"  # Wiki
 
-    depends_on:
+    # depends_on:
       # postgres:
       #   condition: service_healthy
       # redis:
       #   condition: service_healthy
       # minio:
       #   condition: service_healthy
-      ntfy:
-        condition: service_healthy
 
     healthcheck:
       # Check nginx is running and responding
@@ -274,10 +245,6 @@ volumes:
   minio_data:
     driver: local
   plunk_data:
-    driver: local
-  ntfy_cache:
-    driver: local
-  ntfy_etc:
     driver: local
 networks:
   coolify:
